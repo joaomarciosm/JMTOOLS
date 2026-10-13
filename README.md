@@ -30,9 +30,29 @@ JM-Tools/
 └── cases/          # Dados de casos (gitignored)
 ```
 
+## Uso
+
+### Interface gráfica
+
+```
+python gui.py
+```
+
+Tela inicial para criar/abrir casos; dentro do caso: abas de Evidências, Timeline (com filtro por tipo de evento) e Cadeia de Custódia, com botões para adicionar evidência, analisar, verificar integridade e gerar laudo.
+
+### Linha de comando
+
+```
+python cli.py case-new --name "Caso 001" --examiner "Fulano"
+python cli.py evidence-add --case <ID> --path backup.ab --desc "Backup do celular"
+python cli.py analyze --case <ID>
+python cli.py report --case <ID>
+python cli.py timeline --case <ID> --type sms
+```
+
 ## Status
 
-Em desenvolvimento inicial. Módulos funcionais: core (caso + plugins + timeline), disk (parsing básico), mobile (Android ADB backup).
+Módulos funcionais e testados ponta a ponta (ver `docs/roadmap.md` para o que falta): core (caso + cadeia de custódia + timeline + laudo), mobile (Android ADB backup, iOS/iTunes backup), disk (MBR/GPT + listagem completa FAT32), dvr (varredura de gravações), iot (logs syslog), vehicle (log CAN/OBD-II). Interface gráfica (Tkinter) e CLI.
 
 ## Licença
 
