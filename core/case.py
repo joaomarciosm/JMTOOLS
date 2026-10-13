@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.custody import CustodyLog, sha256_file
+from core.custody import CustodyLog, sha256_file, sha256_path
 from core.plugin import ModuleRegistry, build_default_registry
-from core.timeline import Timeline
+from core.timeline import Event, Timeline
 
 
 @dataclass
@@ -71,6 +71,11 @@ class Case:
         case.created_at = manifest["created_at"]
         case.evidence = [EvidenceItem.from_dict(e) for e in manifest["evidence"]]
         case.custody = CustodyLog.from_dict(manifest["custody"])
+
+        if case.timeline_path.exists():
+            events_data = json.loads(case.timeline_path.read_text(encoding="utf-8"))
+            case.timeline.extend([Event(**e) for e in events_data])
+
         return case
 
     def add_evidence(self, source_path: Path, description: str, actor: str) -> EvidenceItem:
@@ -78,7 +83,7 @@ class Case:
             item_id=uuid.uuid4().hex[:10],
             source_path=str(source_path),
             description=description,
-            sha256=sha256_file(source_path),
+            sha256=sha256_path(source_path),
             added_at=datetime.now(timezone.utc).isoformat(),
         )
         self.evidence.append(item)
@@ -91,7 +96,7 @@ class Case:
         return item
 
     def verify_evidence(self, item: EvidenceItem, actor: str) -> bool:
-        current_hash = sha256_file(Path(item.source_path))
+        current_hash = sha256_path(Path(item.source_path))
         ok = current_hash == item.sha256
         self.custody.record(
             actor,
@@ -103,6 +108,7 @@ class Case:
 
     def run_analysis(self, registry: ModuleRegistry | None = None, actor: str = "system") -> None:
         registry = registry or build_default_registry()
+        self.timeline = Timeline()  # recomputa do zero para não duplicar eventos em reanálises
         for item in self.evidence:
             path = Path(item.source_path)
             modules = registry.find_supporting(path)

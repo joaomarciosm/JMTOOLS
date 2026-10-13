@@ -16,6 +16,23 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+def sha256_path(path: Path) -> str:
+    """Hash de um item de evidência: arquivo único (SHA-256 direto) ou pasta
+    (SHA-256 da concatenação ordenada de "caminho relativo + hash de cada
+    arquivo" — fingerprint determinístico de todo o conteúdo da pasta, usado
+    quando a evidência é uma extração lógica como um backup iOS ou dump de
+    DVR em vários arquivos)."""
+    if path.is_file():
+        return sha256_file(path)
+
+    digest = hashlib.sha256()
+    for file_path in sorted(p for p in path.rglob("*") if p.is_file()):
+        rel = file_path.relative_to(path).as_posix()
+        digest.update(rel.encode("utf-8"))
+        digest.update(sha256_file(file_path).encode("ascii"))
+    return digest.hexdigest()
+
+
 @dataclass
 class CustodyEntry:
     timestamp: str

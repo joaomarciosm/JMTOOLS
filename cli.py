@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from core.case import Case
+from reports.generator import write_report
 
 CASES_DIR = Path(__file__).parent / "cases"
 
@@ -45,6 +46,12 @@ def cmd_timeline(args: argparse.Namespace) -> None:
         data = [e for e in data if e["event_type"] == args.type]
     for event in data:
         print(f"[{event['timestamp']}] ({event['event_type']}) {event['description']}")
+
+
+def cmd_report(args: argparse.Namespace) -> None:
+    case = Case.load(args.case, CASES_DIR)
+    path = write_report(case)
+    print(f"Laudo gerado em: {path}")
 
 
 def cmd_case_list(_args: argparse.Namespace) -> None:
@@ -86,6 +93,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--case", required=True)
     p.add_argument("--type", default=None, help="Filtrar por tipo de evento (ex: sms, call, partition_found)")
     p.set_defaults(func=cmd_timeline)
+
+    p = sub.add_parser("report", help="Gerar laudo em Markdown para o caso")
+    p.add_argument("--case", required=True)
+    p.set_defaults(func=cmd_report)
 
     return parser
 

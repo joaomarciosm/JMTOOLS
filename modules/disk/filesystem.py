@@ -18,6 +18,7 @@ from pathlib import Path
 
 from core.plugin import AnalysisModule
 from core.timeline import Event
+from modules.disk.fat32 import FAT32Volume
 
 SECTOR_SIZE = 512
 RAW_EXTENSIONS = {".img", ".dd", ".raw", ".bin"}
@@ -104,7 +105,43 @@ class DiskImageModule(AnalysisModule):
                             metadata={"index": p.index, "filesystem": fs_guess},
                         )
                     )
+                if fs_guess == "FAT32":
+                    events.extend(self._list_fat32(f, p, evidence_item_id))
 
+        return events
+
+    def _list_fat32(self, f, partition: "PartitionInfo", evidence_item_id: str) -> list[Event]:
+        events: list[Event] = []
+        try:
+            volume = FAT32Volume(f, partition.start_offset)
+            for path, fat_entry in volume.walk():
+                if fat_entry.is_dir:
+                    continue
+                event_type = "deleted_file_found" if fat_entry.is_deleted else "file_found"
+                marker = "[DELETADO] " if fat_entry.is_deleted else ""
+                events.append(
+                    self._event(
+                        evidence_item_id,
+                        event_type,
+                        f"{marker}Partição {partition.index}: {path} ({fat_entry.size} bytes)",
+                        metadata={
+                            "index": partition.index,
+                            "path": path,
+                            "size": fat_entry.size,
+                            "first_cluster": fat_entry.first_cluster,
+                            "mtime": fat_entry.mtime,
+                            "ctime": fat_entry.ctime,
+                        },
+                    )
+                )
+        except (struct.error, OSError, ValueError):
+            events.append(
+                self._event(
+                    evidence_item_id,
+                    "fat32_parse_error",
+                    f"Partição {partition.index}: falha ao percorrer diretórios FAT32.",
+                )
+            )
         return events
 
     def _parse_mbr(self, boot_sector: bytes) -> list[PartitionInfo]:

@@ -49,9 +49,17 @@ def build_default_registry() -> ModuleRegistry:
     registry = ModuleRegistry()
 
     from modules.mobile.android_backup import AndroidBackupModule
+    from modules.mobile.ios_backup import IOSBackupModule
     from modules.disk.filesystem import DiskImageModule
+    from modules.dvr.recordings import DVRRecordingsModule
+    from modules.iot.logs import IoTLogModule
+    from modules.vehicle.can_log import CANLogModule
 
     registry.register(AndroidBackupModule())
+    registry.register(IOSBackupModule())
     registry.register(DiskImageModule())
+    registry.register(DVRRecordingsModule())
+    registry.register(IoTLogModule())
+    registry.register(CANLogModule())
 
     return registry
