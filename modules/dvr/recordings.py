@@ -41,7 +41,10 @@ class DVRRecordingsModule(AnalysisModule):
             if p.is_file()
         )
 
-    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
+    def analyze(
+        self, evidence_path: Path, evidence_item_id: str,
+        credential: str | None = None, extracted_dir: Path | None = None,
+    ) -> list[Event]:
         events: list[Event] = []
         for path in evidence_path.rglob("*"):
             if not path.is_file() or path.suffix.lower() not in KNOWN_VIDEO_EXTENSIONS:

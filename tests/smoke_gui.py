@@ -37,9 +37,14 @@ def main() -> None:
     case_frame._generate_report()
     app.update()
 
+    case.run_processing(actor="smoke-test")
+    case_frame._run_search("Oi")
+    app.update()
+
     print("EVIDENCE ROWS:", len(case_frame.evidence_tab.evidence_tree.get_children()))
     print("TIMELINE ROWS:", len(case_frame.timeline_tab.timeline_tree.get_children()))
     print("CUSTODY ROWS:", len(case_frame.custody_tab.custody_tree.get_children()))
+    print("SEARCH ROWS:", len(case_frame.search_tab.search_tree.get_children()))
 
     app.destroy()
     print("SMOKE GUI OK")

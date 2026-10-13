@@ -62,7 +62,10 @@ class CANLogModule(AnalysisModule):
             return False
         return bool(LINE_RE.match(first_line))
 
-    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
+    def analyze(
+        self, evidence_path: Path, evidence_item_id: str,
+        credential: str | None = None, extracted_dir: Path | None = None,
+    ) -> list[Event]:
         events: list[Event] = []
         with open(evidence_path, "r", encoding="ascii", errors="ignore") as f:
             for line in f:

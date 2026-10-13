@@ -20,6 +20,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.extraction import save_extracted_file
 from core.plugin import AnalysisModule
 from core.timeline import Event
 from modules.mobile.whatsapp_crypto import (
@@ -41,7 +42,10 @@ class WhatsAppModule(AnalysisModule):
     def supports(self, evidence_path: Path) -> bool:
         return evidence_path.is_file() and evidence_path.suffix.lower() in EXTENSIONS
 
-    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
+    def analyze(
+        self, evidence_path: Path, evidence_item_id: str,
+        credential: str | None = None, extracted_dir: Path | None = None,
+    ) -> list[Event]:
         if not credential:
             return [
                 self._event(
@@ -92,6 +96,9 @@ class WhatsAppModule(AnalysisModule):
             db_path = Path(tmp) / "msgstore.db"
             db_path.write_bytes(plaintext)
             events.extend(self._scan_messages(db_path, evidence_item_id))
+
+        if extracted_dir is not None:
+            save_extracted_file(extracted_dir, evidence_item_id, f"{evidence_path.name}.decrypted.db", plaintext)
 
         return events
 

@@ -25,11 +25,13 @@ import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.extraction import save_extracted_file
 from core.plugin import AnalysisModule
 from core.timeline import Event
 from modules.mobile.android_crypto import AndroidBackupDecryptError, decrypt_backup
 
 MAGIC = b"ANDROID BACKUP"
+MAX_EXTRACT_SIZE = 50 * 1024 * 1024  # evita copiar arquivos gigantes (vídeos etc.) para o índice
 
 
 class AndroidBackupModule(AnalysisModule):
@@ -44,7 +46,10 @@ class AndroidBackupModule(AnalysisModule):
         except OSError:
             return False
 
-    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
+    def analyze(
+        self, evidence_path: Path, evidence_item_id: str,
+        credential: str | None = None, extracted_dir: Path | None = None,
+    ) -> list[Event]:
         events: list[Event] = []
         with open(evidence_path, "rb") as f:
             raw = f.read()
@@ -100,7 +105,7 @@ class AndroidBackupModule(AnalysisModule):
 
         try:
             with tarfile.open(fileobj=io.BytesIO(payload)) as tar:
-                events.extend(self._scan_tar(tar, evidence_item_id))
+                events.extend(self._scan_tar(tar, evidence_item_id, extracted_dir))
         except tarfile.TarError as exc:
             events.append(
                 self._event(
@@ -121,7 +126,7 @@ class AndroidBackupModule(AnalysisModule):
             offset = nl + 1
         return lines, offset
 
-    def _scan_tar(self, tar: tarfile.TarFile, evidence_item_id: str) -> list[Event]:
+    def _scan_tar(self, tar: tarfile.TarFile, evidence_item_id: str, extracted_dir: Path | None) -> list[Event]:
         events: list[Event] = []
         db_members = []
 
@@ -139,6 +144,11 @@ class AndroidBackupModule(AnalysisModule):
             )
             if member.name.lower().endswith(".db"):
                 db_members.append(member)
+
+            if extracted_dir is not None and 0 < member.size <= MAX_EXTRACT_SIZE:
+                extracted = tar.extractfile(member)
+                if extracted is not None:
+                    save_extracted_file(extracted_dir, evidence_item_id, member.name, extracted.read())
 
         with tempfile.TemporaryDirectory() as tmp:
             for member in db_members:

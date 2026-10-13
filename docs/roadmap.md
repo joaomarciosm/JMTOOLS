@@ -3,6 +3,7 @@
 ## Implementado
 
 - **core**: caso, cadeia de custódia (hash SHA-256 de arquivo ou pasta + log de ações), timeline unificada, registro de plugins, geração de laudo em Markdown.
+- **core.indexer / core.extraction — processamento estilo IPED** (github.com/sepinf-inc/IPED, consultado como referência de arquitetura, não de código — IPED é Java, Apache-2.0, e não copiamos nada dele): depois da análise, os módulos que já têm bytes de arquivo em mãos (Android backup, iOS backup, WhatsApp decodificado, logs IoT) salvam o conteúdo em `case/extracted/`; `Case.run_processing()` indexa tudo isso num banco SQLite+FTS5 (texto completo pesquisável, categorização por tipo, deduplicação por SHA-256) — sem dependência nova, FTS5 já vem com o Python. `Case.search(query)` busca com snippet destacado. CLI: `process`/`search`; GUI: botão "Processar/Indexar" + aba "Busca".
 - **mobile.android_backup**: backups Android ADB (`.ab`) — extração do tar, listagem de arquivos, parsing de SMS e chamadas em qualquer tabela SQLite com colunas compatíveis. **Suporta backups criptografados (AES-256) quando o examinador fornece a senha já conhecida** (algoritmo documentado do AOSP: PBKDF2-SHA1 + AES-256-CBC; validado via padding PKCS7 e abertura do tar — ver `modules/mobile/android_crypto.py` para o escopo exato).
 - **mobile.ios_backup**: backups iOS/iTunes/Finder não criptografados — leitura do `Manifest.db`, resolução de `fileID` para arquivo físico, parsing de `sms.db` (iMessage/SMS) e `call_history`.
 - **mobile.whatsapp**: decodificação de bancos do WhatsApp `.crypt12`/`.crypt14`/`.crypt15` (AES-256-GCM; chave extraída do arquivo de chave do aparelho — Java-serialized `byte[]`, ou hex de 64 dígitos para crypt15 via HKDF-SHA256). Formato confirmado consultando o projeto open source `wa-crypt-tools` (GPL-3.0) só para entender o layout binário — implementação própria aqui, usando `cryptography` e `javaobj-py3`, sem copiar código. Parsing de mensagens pós-decodificação é genérico (detecta tabela com timestamp+texto); suportar o esquema atual completo (chat/jid/message relacionados) fica no roadmap.
@@ -36,8 +37,14 @@ Todos os módulos têm teste de ponta a ponta com fixtures sintéticas em `tests
 - Captura em tempo real via adaptador ELM327/SocketCAN conectado à porta OBD-II (hoje só lemos logs já capturados) — ainda cooperativo, sem exploração.
 - Parsing de imagens de infotainment/EDR já extraídas (formato varia por montadora).
 
+### processamento/indexação (core.indexer)
+- Extração de texto de PDF/Office (hoje só texto puro e SQLite são indexados com conteúdo — binários ficam pesquisáveis só pelo nome).
+- OCR em imagens (o IPED usa Tesseract; ainda não integrado aqui).
+- Galeria de miniaturas de imagem/vídeo na GUI (hoje a aba Busca só lista path+trecho, sem preview visual).
+- Wirear extração de conteúdo também em disk.image (FAT32/NTFS/ext4) e dvr — hoje só listam metadados, não copiam bytes de arquivo para o índice (FAT32Volume/NTFSVolume ainda não têm um método de leitura de conteúdo implementado, só de metadados).
+
 ### geral
-- Interface web (hoje só CLI).
+- Interface web (hoje só CLI + GUI desktop).
 - Exportar laudo também em PDF.
 
 ## Limites permanentes (não sujeitos a mudança de escopo)

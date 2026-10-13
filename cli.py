@@ -7,6 +7,8 @@ Exemplos:
     python cli.py analyze --case 20261012-...
     python cli.py analyze --case 20261012-... --password abc123=senha-do-backup
     python cli.py timeline --case 20261012-...
+    python cli.py process --case 20261012-...
+    python cli.py search --case 20261012-... "termo de busca"
 """
 from __future__ import annotations
 
@@ -62,6 +64,29 @@ def cmd_report(args: argparse.Namespace) -> None:
     print(f"Laudo gerado em: {path}")
 
 
+def cmd_process(args: argparse.Namespace) -> None:
+    case = Case.load(args.case, CASES_DIR)
+    stats = case.run_processing(actor=args.examiner or case.examiner)
+    print(f"Processamento concluído: {stats['files']} arquivos, {stats['indexed_text']} com texto indexado, "
+          f"{stats['duplicates']} duplicados.")
+    for category, count in sorted(stats["categories"].items(), key=lambda kv: -kv[1]):
+        print(f"  {category}: {count}")
+    print(f"Índice salvo em: {case.index_path}")
+
+
+def cmd_search(args: argparse.Namespace) -> None:
+    case = Case.load(args.case, CASES_DIR)
+    results = case.search(args.query, limit=args.limit)
+    if not results:
+        print("Nenhum resultado.")
+        return
+    for r in results:
+        dup = " [DUPLICADO]" if r["is_duplicate"] else ""
+        print(f"[{r['category']}] {r['path']}{dup}")
+        if r["snippet"].strip():
+            print(f"    {r['snippet']}")
+
+
 def cmd_case_list(_args: argparse.Namespace) -> None:
     if not CASES_DIR.exists():
         print("Nenhum caso encontrado.")
@@ -110,6 +135,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="Gerar laudo em Markdown para o caso")
     p.add_argument("--case", required=True)
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("process", help="Indexar (texto completo + categorização + dedup) os arquivos extraídos")
+    p.add_argument("--case", required=True)
+    p.add_argument("--examiner", default=None)
+    p.set_defaults(func=cmd_process)
+
+    p = sub.add_parser("search", help="Buscar por texto no índice do caso (requer 'process' antes)")
+    p.add_argument("--case", required=True)
+    p.add_argument("query")
+    p.add_argument("--limit", type=int, default=100)
+    p.set_defaults(func=cmd_search)
 
     return parser
 

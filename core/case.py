@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.custody import CustodyLog, sha256_file, sha256_path
+from core.indexer import build_index, search as index_search
 from core.plugin import ModuleRegistry, build_default_registry
 from core.timeline import Event, Timeline
 
@@ -53,6 +54,14 @@ class Case:
     @property
     def timeline_path(self) -> Path:
         return self.case_dir / "timeline.json"
+
+    @property
+    def extracted_dir(self) -> Path:
+        return self.case_dir / "extracted"
+
+    @property
+    def index_path(self) -> Path:
+        return self.case_dir / "index.sqlite"
 
     @classmethod
     def create(cls, name: str, examiner: str, cases_dir: Path) -> "Case":
@@ -125,7 +134,7 @@ class Case:
                 continue
             credential = credentials.get(item.item_id)
             for module in modules:
-                events = module.analyze(path, item.item_id, credential=credential)
+                events = module.analyze(path, item.item_id, credential=credential, extracted_dir=self.extracted_dir)
                 self.timeline.extend(events)
                 self.custody.record(
                     actor,
@@ -134,6 +143,23 @@ class Case:
                     + (" credencial_fornecida=sim" if credential else ""),
                 )
         self.save()
+
+    def run_processing(self, actor: str = "system") -> dict:
+        """Indexa (texto completo + categorização + dedup) tudo que os
+        módulos de análise extraíram para `self.extracted_dir`. Deve rodar
+        depois de run_analysis(). Inspirado no estágio de processamento do
+        IPED — ver core/indexer.py para o escopo exato."""
+        stats = build_index(self.extracted_dir, self.index_path)
+        self.custody.record(
+            actor,
+            "processing_run",
+            f"arquivos={stats['files']} indexados_texto={stats['indexed_text']} duplicados={stats['duplicates']}",
+        )
+        self.save()
+        return stats
+
+    def search(self, query: str, limit: int = 100) -> list[dict]:
+        return index_search(self.index_path, query, limit=limit)
 
     def save(self) -> None:
         self.case_dir.mkdir(parents=True, exist_ok=True)

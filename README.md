@@ -16,7 +16,7 @@ Qualquer funcionalidade de "aquisição" assume que o acesso ao dispositivo/míd
 
 ```
 JM-Tools/
-├── core/           # Gerenciamento de caso, cadeia de custódia, motor de plugins, timeline
+├── core/           # Gerenciamento de caso, cadeia de custódia, motor de plugins, timeline, indexação/busca
 ├── modules/
 │   ├── disk/       # Aquisição e análise de HD/SSD (imagem, sistema de arquivos, recuperação de deletados)
 │   ├── mobile/     # Análise de backups/extrações móveis (Android/iOS)
@@ -38,7 +38,7 @@ JM-Tools/
 python gui.py
 ```
 
-Tela inicial para criar/abrir casos; dentro do caso: abas de Evidências, Timeline (com filtro por tipo de evento) e Cadeia de Custódia, com botões para adicionar evidência, analisar, verificar integridade e gerar laudo.
+Tela inicial para criar/abrir casos; dentro do caso: abas de Evidências, Timeline (com filtro por tipo de evento), Busca (texto completo, estilo IPED) e Cadeia de Custódia, com botões para adicionar evidência, analisar, processar/indexar, verificar integridade e gerar laudo.
 
 ### Linha de comando
 
@@ -48,6 +48,8 @@ python cli.py evidence-add --case <ID> --path backup.ab --desc "Backup do celula
 python cli.py analyze --case <ID>
 python cli.py report --case <ID>
 python cli.py timeline --case <ID> --type sms
+python cli.py process --case <ID>
+python cli.py search --case <ID> "termo de busca"
 ```
 
 ## Status

@@ -159,6 +159,7 @@ class CaseFrame(ttk.Frame):
         ttk.Button(toolbar, text="+ Evidência (pasta)", command=self._add_evidence_folder).pack(side="left", padx=2)
         ttk.Button(toolbar, text="🔑 Definir senha", command=self._set_credential).pack(side="left", padx=2)
         ttk.Button(toolbar, text="▶ Analisar", command=self._run_analysis).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="🗂 Processar/Indexar", command=self._run_processing).pack(side="left", padx=2)
         ttk.Button(toolbar, text="✔ Verificar integridade", command=self._verify_integrity).pack(side="left", padx=2)
         ttk.Button(toolbar, text="📄 Gerar laudo", command=self._generate_report).pack(side="left", padx=2)
 
@@ -170,9 +171,11 @@ class CaseFrame(ttk.Frame):
 
         self.evidence_tab = self._build_evidence_tab(notebook)
         self.timeline_tab = self._build_timeline_tab(notebook)
+        self.search_tab = self._build_search_tab(notebook)
         self.custody_tab = self._build_custody_tab(notebook)
         notebook.add(self.evidence_tab, text="Evidências")
         notebook.add(self.timeline_tab, text="Timeline")
+        notebook.add(self.search_tab, text="Busca")
         notebook.add(self.custody_tab, text="Cadeia de custódia")
 
         self._refresh_all()
@@ -232,6 +235,33 @@ class CaseFrame(ttk.Frame):
             tree.column(col, width=width, anchor="w")
         tree.pack(fill="both", expand=True)
         frame.custody_tree = tree  # type: ignore[attr-defined]
+        return frame
+
+    def _build_search_tab(self, parent) -> ttk.Frame:
+        frame = ttk.Frame(parent, padding=8)
+
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", pady=(0, 6))
+        ttk.Label(bar, text="Buscar:").pack(side="left")
+        query_var = tk.StringVar()
+        entry = ttk.Entry(bar, textvariable=query_var, width=50)
+        entry.pack(side="left", padx=6)
+        entry.bind("<Return>", lambda _e: self._run_search(query_var.get()))
+        ttk.Button(bar, text="Buscar", command=lambda: self._run_search(query_var.get())).pack(side="left")
+        ttk.Label(
+            bar, text="(rode \"Processar/Indexar\" primeiro)", style="SubHeader.TLabel"
+        ).pack(side="left", padx=10)
+
+        columns = ("category", "path", "snippet")
+        tree = ttk.Treeview(frame, columns=columns, show="headings")
+        for col, label, width in [
+            ("category", "Categoria", 120), ("path", "Caminho", 320), ("snippet", "Trecho encontrado", 420),
+        ]:
+            tree.heading(col, text=label)
+            tree.column(col, width=width, anchor="w")
+        tree.pack(fill="both", expand=True)
+        frame.search_tree = tree  # type: ignore[attr-defined]
+        frame.query_var = query_var  # type: ignore[attr-defined]
         return frame
 
     # ---------- ações ----------
@@ -302,6 +332,33 @@ class CaseFrame(ttk.Frame):
     def _on_analysis_done(self) -> None:
         self.status_var.set(f"Análise concluída — {len(self.case.timeline)} eventos na timeline.")
         self._refresh_all()
+
+    def _run_processing(self) -> None:
+        self.status_var.set("Processando/indexando arquivos extraídos, aguarde...")
+        self.update_idletasks()
+
+        def worker() -> None:
+            stats = self.case.run_processing(actor=self.case.examiner)
+            self.after(0, lambda: self._on_processing_done(stats))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_processing_done(self, stats: dict) -> None:
+        self.status_var.set(
+            f"Processamento concluído — {stats['files']} arquivos, "
+            f"{stats['indexed_text']} com texto indexado, {stats['duplicates']} duplicados."
+        )
+
+    def _run_search(self, query: str) -> None:
+        if not query.strip():
+            return
+        tree = self.search_tab.search_tree  # type: ignore[attr-defined]
+        tree.delete(*tree.get_children())
+        results = self.case.search(query)
+        for r in results:
+            label = f"{r['path']} [DUPLICADO]" if r["is_duplicate"] else r["path"]
+            tree.insert("", "end", values=(r["category"], label, r["snippet"]))
+        self.status_var.set(f"{len(results)} resultado(s) para \"{query}\".")
 
     def _verify_integrity(self) -> None:
         results = []

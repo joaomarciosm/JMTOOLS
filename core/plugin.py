@@ -25,13 +25,25 @@ class AnalysisModule(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
+    def analyze(
+        self,
+        evidence_path: Path,
+        evidence_item_id: str,
+        credential: str | None = None,
+        extracted_dir: Path | None = None,
+    ) -> list[Event]:
         """Processa a evidência e retorna uma lista de eventos de timeline.
 
-        `credential` é uma senha que o examinador já conhece legalmente (ex:
-        senha de backup definida pelo dono do aparelho) — usada apenas para
-        decodificar dados já adquiridos, nunca para descobrir/quebrar uma
-        senha desconhecida. Nunca é persistida no caso nem no laudo."""
+        `credential` é uma senha/chave que o examinador já conhece legalmente
+        (ex: senha de backup definida pelo dono do aparelho) — usada apenas
+        para decodificar dados já adquiridos, nunca para descobrir/quebrar uma
+        credencial desconhecida. Nunca é persistida no caso nem no laudo.
+
+        `extracted_dir`, quando fornecido, é onde o módulo pode salvar (via
+        core.extraction.save_extracted_file) os arquivos que já extraiu, para
+        serem indexados depois por Case.run_processing(). Opcional — um
+        módulo que não tem bytes de arquivo prontos (ex: só metadados de
+        partição) simplesmente ignora o parâmetro."""
         raise NotImplementedError
 
 
