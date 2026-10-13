@@ -411,6 +411,110 @@ def make_ntfs_image() -> Path:
     return out_path
 
 
+def _ext4_dirent(inode: int, name: str, file_type: int, rec_len: int) -> bytes:
+    name_bytes = name.encode("utf-8")
+    buf = bytearray(8 + len(name_bytes))
+    struct.pack_into("<IHBB", buf, 0, inode, rec_len, len(name_bytes), file_type)
+    buf[8: 8 + len(name_bytes)] = name_bytes
+    return bytes(buf)
+
+
+def _ext4_inode(mode: int, size: int, ts: int, dtime: int, links_count: int,
+                 extent_block: int | None, extent_len: int, inode_size: int = 256) -> bytes:
+    buf = bytearray(inode_size)
+    struct.pack_into("<H", buf, 0, mode)
+    struct.pack_into("<I", buf, 4, size)
+    struct.pack_into("<IIII", buf, 8, ts, ts, ts, dtime)  # atime, ctime, mtime, dtime
+    struct.pack_into("<H", buf, 26, links_count)
+    flags = 0x80000 if extent_block is not None else 0
+    struct.pack_into("<I", buf, 32, flags)
+    if extent_block is not None:
+        struct.pack_into("<HHHHI", buf, 40, 0xF30A, 1, 4, 0, 0)
+        struct.pack_into("<IHHI", buf, 52, 0, extent_len, 0, extent_block)
+    return bytes(buf)
+
+
+def make_ext4_image() -> Path:
+    """Imagem raw com MBR + 1 partição ext2/3/4 funcional (superbloco, tabela
+    de grupo, tabela de inodes, diretório raiz com extents, 1 inode deletado)."""
+    FIXTURES_DIR.mkdir(exist_ok=True)
+    out_path = FIXTURES_DIR / "sample_disk_ext4.img"
+
+    PART_START_LBA = 2048
+    PART_OFFSET = PART_START_LBA * 512
+    BLOCK_SIZE = 1024
+    INODES_PER_GROUP = 32
+    INODE_SIZE = 256
+    INODES_COUNT = INODES_PER_GROUP
+
+    SB_BLOCK = 1
+    GD_BLOCK = 2
+    INODE_TABLE_BLOCK = 3  # ocupa blocos 3..10 (32*256=8192 bytes = 8 blocos de 1024)
+    ROOT_DIR_BLOCK = 11
+    HELLO_DATA_BLOCK = 12
+
+    total_blocks = 20
+    image = bytearray(PART_OFFSET + total_blocks * BLOCK_SIZE)
+
+    entry = struct.pack("<BBBBBBBBII", 0x00, 0, 0, 0, 0x83, 0, 0, 0, PART_START_LBA, 20480)
+    image[446:446 + len(entry)] = entry
+    image[510:512] = b"\x55\xaa"
+
+    def block_off(n: int) -> int:
+        return PART_OFFSET + n * BLOCK_SIZE
+
+    sb_off = PART_OFFSET + 1024
+    struct.pack_into("<I", image, sb_off + 0, INODES_COUNT)
+    struct.pack_into("<I", image, sb_off + 4, total_blocks)
+    struct.pack_into("<I", image, sb_off + 20, 1)  # first_data_block
+    struct.pack_into("<I", image, sb_off + 24, 0)  # log_block_size => 1024 << 0
+    struct.pack_into("<I", image, sb_off + 32, 8192)  # blocks_per_group
+    struct.pack_into("<I", image, sb_off + 40, INODES_PER_GROUP)
+    struct.pack_into("<H", image, sb_off + 56, 0xEF53)  # magic
+    struct.pack_into("<H", image, sb_off + 88, INODE_SIZE)
+    struct.pack_into("<I", image, sb_off + 96, 0x0002 | 0x0040)  # FILETYPE | EXTENTS
+
+    gd_off = block_off(GD_BLOCK)
+    struct.pack_into("<I", image, gd_off + 8, INODE_TABLE_BLOCK)  # bg_inode_table_lo
+
+    now_epoch = int(datetime(2026, 5, 1, 10, 0, 0, tzinfo=timezone.utc).timestamp())
+
+    hello_content = b"Conteudo ext4 de teste.\n"
+    secret_content_size = 999  # simula tamanho que ainda constava no inode antes do unlink
+
+    root_inode = _ext4_inode(0x4000 | 0o755, BLOCK_SIZE, now_epoch, 0, 2, ROOT_DIR_BLOCK, 1)
+    hello_inode = _ext4_inode(0x8000 | 0o644, len(hello_content), now_epoch, 0, 1, HELLO_DATA_BLOCK, 1)
+    deleted_inode = _ext4_inode(0x8000 | 0o644, secret_content_size, now_epoch, now_epoch + 60, 0, None, 0)
+
+    def write_inode(inode_num: int, data: bytes) -> None:
+        index = inode_num - 1
+        off = block_off(INODE_TABLE_BLOCK) + index * INODE_SIZE
+        image[off: off + len(data)] = data
+
+    write_inode(2, root_inode)   # raiz
+    write_inode(11, hello_inode)
+    write_inode(12, deleted_inode)
+
+    root_block = bytearray(BLOCK_SIZE)
+    dirent_offset = 0
+    for inode_num, name, ftype, rec_len in (
+        (2, ".", 2, 12),
+        (2, "..", 2, 12),
+        (11, "hello.txt", 1, BLOCK_SIZE - 24),
+    ):
+        entry_bytes = _ext4_dirent(inode_num, name, ftype, rec_len)
+        root_block[dirent_offset: dirent_offset + len(entry_bytes)] = entry_bytes
+        dirent_offset += rec_len  # próxima entrada começa no rec_len da anterior (alinhamento ext4)
+    root_block_off = block_off(ROOT_DIR_BLOCK)
+    image[root_block_off: root_block_off + len(root_block)] = root_block
+
+    hello_block_off = block_off(HELLO_DATA_BLOCK)
+    image[hello_block_off: hello_block_off + len(hello_content)] = hello_content
+
+    out_path.write_bytes(bytes(image))
+    return out_path
+
+
 def make_can_log() -> Path:
     FIXTURES_DIR.mkdir(exist_ok=True)
     out_path = FIXTURES_DIR / "sample_can.log"
@@ -430,6 +534,7 @@ if __name__ == "__main__":
     ab_encrypted = make_encrypted_android_backup()
     img = make_disk_image()
     ntfs_img = make_ntfs_image()
+    ext4_img = make_ext4_image()
     ios_dir = make_ios_backup()
     dvr_dir = make_dvr_folder()
     can_log = make_can_log()
@@ -437,6 +542,7 @@ if __name__ == "__main__":
     print(f"Backup Android criptografado (senha: senha-conhecida-123): {ab_encrypted}")
     print(f"Imagem de disco (FAT32): {img}")
     print(f"Imagem de disco (NTFS): {ntfs_img}")
+    print(f"Imagem de disco (ext4): {ext4_img}")
     print(f"Backup iOS: {ios_dir}")
     print(f"Pasta DVR: {dvr_dir}")
     print(f"Log CAN: {can_log}")

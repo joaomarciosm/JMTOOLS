@@ -18,6 +18,7 @@ from pathlib import Path
 
 from core.plugin import AnalysisModule
 from core.timeline import Event
+from modules.disk.ext4 import Ext4Volume
 from modules.disk.fat32 import FAT32Volume
 from modules.disk.ntfs import NTFSVolume
 
@@ -110,7 +111,43 @@ class DiskImageModule(AnalysisModule):
                     events.extend(self._list_fat32(f, p, evidence_item_id))
                 elif fs_guess == "NTFS":
                     events.extend(self._list_ntfs(f, p, evidence_item_id))
+                elif fs_guess == "ext2/3/4":
+                    events.extend(self._list_ext4(f, p, evidence_item_id))
 
+        return events
+
+    def _list_ext4(self, f, partition: "PartitionInfo", evidence_item_id: str) -> list[Event]:
+        events: list[Event] = []
+        try:
+            volume = Ext4Volume(f, partition.start_offset)
+            all_entries = volume.walk() + volume.find_deleted_inodes()
+            for entry in all_entries:
+                event_type = "deleted_file_found" if entry["is_deleted"] else "file_found"
+                marker = "[DELETADO] " if entry["is_deleted"] else ""
+                events.append(
+                    self._event(
+                        evidence_item_id,
+                        event_type,
+                        f"{marker}Partição {partition.index}: {entry['path']} ({entry['size']} bytes)",
+                        metadata={
+                            "index": partition.index,
+                            "path": entry["path"],
+                            "size": entry["size"],
+                            "inode": entry["inode"],
+                            "mtime": entry["mtime"],
+                            "ctime": entry["ctime"],
+                        },
+                        timestamp=entry["mtime"],
+                    )
+                )
+        except (struct.error, ValueError, OSError):
+            events.append(
+                self._event(
+                    evidence_item_id,
+                    "ext4_parse_error",
+                    f"Partição {partition.index}: falha ao percorrer inodes/diretórios ext2/3/4.",
+                )
+            )
         return events
 
     def _list_ntfs(self, f, partition: "PartitionInfo", evidence_item_id: str) -> list[Event]:
