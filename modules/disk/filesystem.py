@@ -16,7 +16,7 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.plugin import AnalysisModule
+from core.plugin import AnalysisContext, AnalysisModule
 from core.timeline import Event
 from modules.disk.ext4 import Ext4Volume
 from modules.disk.fat32 import FAT32Volume
@@ -65,10 +65,7 @@ class DiskImageModule(AnalysisModule):
             return False
         return len(boot_sector) == SECTOR_SIZE and boot_sector[510:512] == b"\x55\xaa"
 
-    def analyze(
-        self, evidence_path: Path, evidence_item_id: str,
-        credential: str | None = None, extracted_dir: Path | None = None,
-    ) -> list[Event]:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, context: AnalysisContext) -> list[Event]:
         events: list[Event] = []
         with open(evidence_path, "rb") as f:
             boot_sector = f.read(SECTOR_SIZE)

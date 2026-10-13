@@ -1,2 +1,3 @@
 cryptography>=42
 javaobj-py3>=0.4
+Pillow>=10

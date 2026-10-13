@@ -3,7 +3,10 @@
 ## Implementado
 
 - **core**: caso, cadeia de custódia (hash SHA-256 de arquivo ou pasta + log de ações), timeline unificada, registro de plugins, geração de laudo em Markdown.
-- **core.indexer / core.extraction — processamento estilo IPED** (github.com/sepinf-inc/IPED, consultado como referência de arquitetura, não de código — IPED é Java, Apache-2.0, e não copiamos nada dele): depois da análise, os módulos que já têm bytes de arquivo em mãos (Android backup, iOS backup, WhatsApp decodificado, logs IoT) salvam o conteúdo em `case/extracted/`; `Case.run_processing()` indexa tudo isso num banco SQLite+FTS5 (texto completo pesquisável, categorização por tipo, deduplicação por SHA-256) — sem dependência nova, FTS5 já vem com o Python. `Case.search(query)` busca com snippet destacado. CLI: `process`/`search`; GUI: botão "Processar/Indexar" + aba "Busca".
+- **core.config — configuração por operador**: cada caso tem `config.json` próprio (módulos desabilitados, tamanho máximo de extração, palavras-chave de destaque, padrões PII a buscar, lista de hash conhecido, limiar de clustering de imagem, OCR ligado/desligado). GUI: botão "⚙ Configurações" com diálogo completo; editável também direto no JSON.
+- **core.indexer / core.extraction / core.pii_scan / core.image_hash / core.ocr / core.graph — processamento estilo IPED** (github.com/sepinf-inc/IPED, consultado como referência de arquitetura, não de código — IPED é Java, Apache-2.0, e não copiamos nada dele): depois da análise, os módulos que já têm bytes de arquivo em mãos salvam o conteúdo em `case/extracted/`; `Case.run_processing()` indexa tudo isso num banco SQLite+FTS5 (texto completo pesquisável, categorização por tipo, deduplicação por SHA-256) — sem dependência nova de banco, FTS5 já vem com o Python. Além disso: marca arquivos de uma lista de hash conhecido (estilo NSRL) como irrelevantes sem removê-los; busca padrões sensíveis no texto indexado (cartão de crédito com checagem de Luhn, CPF/CNPJ, e-mail, URL, carteiras BTC/ETH, telefone BR — valores de cartão/CPF/CNPJ mascarados); agrupa imagens semelhantes por hash perceptual (average hash); roda OCR via Tesseract se instalado e habilitado; destaca palavras-chave do operador criando eventos `keyword_hit` na timeline automaticamente. `Case.search()` busca com snippet; `Case.pii_report()`, `Case.image_clusters()`, `Case.contact_counts()` (grafo de comunicação a partir de SMS/chamadas/WhatsApp/histórico de navegador) completam o pacote. CLI: `process`/`search`/`pii-report`/`image-clusters`/`graph`. GUI: botão "Processar/Indexar", abas "Busca" (com botão de relatório PII e visualizador hex/texto ao dar duplo-clique num resultado), "Galeria" (miniaturas) e "Grafo" (desenho em Canvas).
+- **modules/disk/carving.py**: recuperação de JPEG/PNG/PDF por assinatura de arquivo em imagens raw, mesmo sem metadados de sistema de arquivos íntegros — varre a imagem inteira (não só espaço não alocado). Desabilitado por padrão (lento/ruidoso), liga pela configuração do caso.
+- **modules/web/browser_history.py**: histórico do Chrome/Edge/Brave (`History`) e Firefox (`places.sqlite`), formatos públicos e documentados pelos próprios navegadores.
 - **mobile.android_backup**: backups Android ADB (`.ab`) — extração do tar, listagem de arquivos, parsing de SMS e chamadas em qualquer tabela SQLite com colunas compatíveis. **Suporta backups criptografados (AES-256) quando o examinador fornece a senha já conhecida** (algoritmo documentado do AOSP: PBKDF2-SHA1 + AES-256-CBC; validado via padding PKCS7 e abertura do tar — ver `modules/mobile/android_crypto.py` para o escopo exato).
 - **mobile.ios_backup**: backups iOS/iTunes/Finder não criptografados — leitura do `Manifest.db`, resolução de `fileID` para arquivo físico, parsing de `sms.db` (iMessage/SMS) e `call_history`.
 - **mobile.whatsapp**: decodificação de bancos do WhatsApp `.crypt12`/`.crypt14`/`.crypt15` (AES-256-GCM; chave extraída do arquivo de chave do aparelho — Java-serialized `byte[]`, ou hex de 64 dígitos para crypt15 via HKDF-SHA256). Formato confirmado consultando o projeto open source `wa-crypt-tools` (GPL-3.0) só para entender o layout binário — implementação própria aqui, usando `cryptography` e `javaobj-py3`, sem copiar código. Parsing de mensagens pós-decodificação é genérico (detecta tabela com timestamp+texto); suportar o esquema atual completo (chat/jid/message relacionados) fica no roadmap.
@@ -37,18 +40,23 @@ Todos os módulos têm teste de ponta a ponta com fixtures sintéticas em `tests
 - Captura em tempo real via adaptador ELM327/SocketCAN conectado à porta OBD-II (hoje só lemos logs já capturados) — ainda cooperativo, sem exploração.
 - Parsing de imagens de infotainment/EDR já extraídas (formato varia por montadora).
 
-### processamento/indexação (core.indexer)
-- Extração de texto de PDF/Office (hoje só texto puro e SQLite são indexados com conteúdo — binários ficam pesquisáveis só pelo nome).
-- OCR em imagens (o IPED usa Tesseract; ainda não integrado aqui).
-- Galeria de miniaturas de imagem/vídeo na GUI (hoje a aba Busca só lista path+trecho, sem preview visual).
-- Wirear extração de conteúdo também em disk.image (FAT32/NTFS/ext4) e dvr — hoje só listam metadados, não copiam bytes de arquivo para o índice (FAT32Volume/NTFSVolume ainda não têm um método de leitura de conteúdo implementado, só de metadados).
+### processamento/indexação (core.indexer e módulos relacionados)
+- Extração de texto de PDF/Office (hoje só texto puro e SQLite são indexados com conteúdo; imagens só com OCR ligado — binários sem extrator ficam pesquisáveis só pelo nome).
+- Carving eficiente/streaming para imagens muito grandes (hoje `disk.carving` carrega até 500MB em memória; acima disso só escaneia o início do arquivo) e carving restrito a espaço não alocado de verdade (exigiria ler o bitmap/tabela de alocação de cada sistema de arquivos — hoje varremos a imagem inteira).
+- Fuzzy hashing genérico tipo ssdeep para qualquer tipo de arquivo (hoje o clustering por similaridade só existe para imagens, via hash perceptual).
+- Vídeo na galeria (hoje só imagens têm miniatura).
+- Grafo de comunicação mais rico (hoje é contagem de frequência + layout circular; sem direção da comunicação enviada/recebida nem linha do tempo).
+- Galeria/área de nudez: **decisão deliberadamente não tomada aqui.** Detecção de nudez e reconhecimento facial (recursos do IPED) envolvem modelos de ML e questões de privacidade/LGPD reais o suficiente para merecer uma decisão própria do operador/responsável legal, não uma implementação automática por request de "todas as funcionalidades".
+- Transcrição de áudio: adiado por exigir um modelo de ML pesado (ex: Whisper, centenas de MB) — o operador pode integrar uma ferramenta externa e importar o texto resultante como evidência de texto, se quiser, enquanto isso não é nativo.
 
 ### geral
 - Interface web (hoje só CLI + GUI desktop).
 - Exportar laudo também em PDF.
+- Empacotamento/compilação (ex: executável standalone via PyInstaller) — adiado a pedido explícito do usuário, para quando for solicitado.
 
 ## Limites permanentes (não sujeitos a mudança de escopo)
 
 - Nenhum módulo de bypass de bloqueio de tela, senha de dispositivo ou criptografia.
 - Nenhuma exploração de vulnerabilidade de firmware/software para obter acesso não autorizado.
 - Toda "aquisição" assume acesso legal prévio ao dispositivo/mídia.
+- Nenhuma engenharia reversa de software comercial de terceiros (Cellebrite, Axiom, XRY, MOBILedit, etc.) para copiar funcionalidade.

@@ -24,10 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.extraction import save_extracted_file
-from core.plugin import AnalysisModule
+from core.plugin import AnalysisContext, AnalysisModule
 from core.timeline import Event
-
-MAX_EXTRACT_SIZE = 50 * 1024 * 1024  # evita copiar arquivos gigantes (vídeos etc.) para o índice
 
 
 class IOSBackupModule(AnalysisModule):
@@ -36,10 +34,7 @@ class IOSBackupModule(AnalysisModule):
     def supports(self, evidence_path: Path) -> bool:
         return evidence_path.is_dir() and (evidence_path / "Manifest.db").exists()
 
-    def analyze(
-        self, evidence_path: Path, evidence_item_id: str,
-        credential: str | None = None, extracted_dir: Path | None = None,
-    ) -> list[Event]:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, context: AnalysisContext) -> list[Event]:
         events: list[Event] = []
 
         manifest_plist_path = evidence_path / "Manifest.plist"
@@ -84,13 +79,15 @@ class IOSBackupModule(AnalysisModule):
                 )
 
                 if (
-                    extracted_dir is not None
+                    context.extracted_dir is not None
                     and not is_dir
                     and physical_path.exists()
                     and size is not None
-                    and 0 < size <= MAX_EXTRACT_SIZE
+                    and 0 < size <= context.max_extract_size
                 ):
-                    save_extracted_file(extracted_dir, evidence_item_id, relative_path, physical_path.read_bytes())
+                    save_extracted_file(
+                        context.extracted_dir, evidence_item_id, relative_path, physical_path.read_bytes()
+                    )
 
                 lower_path = relative_path.lower()
                 if "sms.db" in lower_path and physical_path.exists():

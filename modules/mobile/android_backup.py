@@ -26,12 +26,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.extraction import save_extracted_file
-from core.plugin import AnalysisModule
+from core.plugin import AnalysisContext, AnalysisModule
 from core.timeline import Event
 from modules.mobile.android_crypto import AndroidBackupDecryptError, decrypt_backup
 
 MAGIC = b"ANDROID BACKUP"
-MAX_EXTRACT_SIZE = 50 * 1024 * 1024  # evita copiar arquivos gigantes (vídeos etc.) para o índice
 
 
 class AndroidBackupModule(AnalysisModule):
@@ -46,10 +45,7 @@ class AndroidBackupModule(AnalysisModule):
         except OSError:
             return False
 
-    def analyze(
-        self, evidence_path: Path, evidence_item_id: str,
-        credential: str | None = None, extracted_dir: Path | None = None,
-    ) -> list[Event]:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, context: AnalysisContext) -> list[Event]:
         events: list[Event] = []
         with open(evidence_path, "rb") as f:
             raw = f.read()
@@ -58,7 +54,7 @@ class AndroidBackupModule(AnalysisModule):
         version, compressed, encryption = header_lines[1], header_lines[2], header_lines[3]
 
         if encryption.lower() != "none":
-            if not credential:
+            if not context.credential:
                 events.append(
                     self._event(
                         evidence_item_id,
@@ -76,7 +72,7 @@ class AndroidBackupModule(AnalysisModule):
                 user_iv = bytes.fromhex(crypto_lines[3])
                 master_key_blob = bytes.fromhex(crypto_lines[4])
                 payload = decrypt_backup(
-                    credential, user_salt, rounds, user_iv, master_key_blob, raw[payload_offset:]
+                    context.credential, user_salt, rounds, user_iv, master_key_blob, raw[payload_offset:]
                 )
             except (AndroidBackupDecryptError, ValueError) as exc:
                 events.append(
@@ -105,7 +101,7 @@ class AndroidBackupModule(AnalysisModule):
 
         try:
             with tarfile.open(fileobj=io.BytesIO(payload)) as tar:
-                events.extend(self._scan_tar(tar, evidence_item_id, extracted_dir))
+                events.extend(self._scan_tar(tar, evidence_item_id, context.extracted_dir, context.max_extract_size))
         except tarfile.TarError as exc:
             events.append(
                 self._event(
@@ -126,7 +122,9 @@ class AndroidBackupModule(AnalysisModule):
             offset = nl + 1
         return lines, offset
 
-    def _scan_tar(self, tar: tarfile.TarFile, evidence_item_id: str, extracted_dir: Path | None) -> list[Event]:
+    def _scan_tar(
+        self, tar: tarfile.TarFile, evidence_item_id: str, extracted_dir: Path | None, max_extract_size: int,
+    ) -> list[Event]:
         events: list[Event] = []
         db_members = []
 
@@ -145,7 +143,7 @@ class AndroidBackupModule(AnalysisModule):
             if member.name.lower().endswith(".db"):
                 db_members.append(member)
 
-            if extracted_dir is not None and 0 < member.size <= MAX_EXTRACT_SIZE:
+            if extracted_dir is not None and 0 < member.size <= max_extract_size:
                 extracted = tar.extractfile(member)
                 if extracted is not None:
                     save_extracted_file(extracted_dir, evidence_item_id, member.name, extracted.read())

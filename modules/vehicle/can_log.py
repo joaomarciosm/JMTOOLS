@@ -19,7 +19,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.plugin import AnalysisModule
+from core.plugin import AnalysisContext, AnalysisModule
 from core.timeline import Event
 
 LINE_RE = re.compile(r"^\((?P<ts>\d+\.\d+)\)\s+(?P<iface>\S+)\s+(?P<id>[0-9A-Fa-f]+)#(?P<data>[0-9A-Fa-f]*)$")
@@ -62,10 +62,7 @@ class CANLogModule(AnalysisModule):
             return False
         return bool(LINE_RE.match(first_line))
 
-    def analyze(
-        self, evidence_path: Path, evidence_item_id: str,
-        credential: str | None = None, extracted_dir: Path | None = None,
-    ) -> list[Event]:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, context: AnalysisContext) -> list[Event]:
         events: list[Event] = []
         with open(evidence_path, "r", encoding="ascii", errors="ignore") as f:
             for line in f:

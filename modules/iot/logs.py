@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.extraction import save_extracted_file
-from core.plugin import AnalysisModule
+from core.plugin import AnalysisContext, AnalysisModule
 from core.timeline import Event
 
 LOG_FILENAME_HINTS = {"syslog", "messages", "kern.log", "daemon.log", "auth.log", "dmesg"}
@@ -42,10 +42,7 @@ class IoTLogModule(AnalysisModule):
             return False
         return any(self._is_log_file(p) for p in evidence_path.rglob("*") if p.is_file())
 
-    def analyze(
-        self, evidence_path: Path, evidence_item_id: str,
-        credential: str | None = None, extracted_dir: Path | None = None,
-    ) -> list[Event]:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, context: AnalysisContext) -> list[Event]:
         events: list[Event] = []
         for path in evidence_path.rglob("*"):
             if not path.is_file() or not self._is_log_file(path):
@@ -56,9 +53,9 @@ class IoTLogModule(AnalysisModule):
             except OSError:
                 continue
 
-            if extracted_dir is not None:
+            if context.extracted_dir is not None:
                 rel = path.relative_to(evidence_path).as_posix()
-                save_extracted_file(extracted_dir, evidence_item_id, rel, raw_text.encode("utf-8"))
+                save_extracted_file(context.extracted_dir, evidence_item_id, rel, raw_text.encode("utf-8"))
 
             for line in raw_text.splitlines():
                 event = self._parse_line(line, file_year, path, evidence_path, evidence_item_id)

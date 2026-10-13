@@ -682,6 +682,73 @@ def _build_minimal_whatsapp_sqlite() -> bytes:
     return data
 
 
+def make_browser_history_fixture() -> Path:
+    """Chrome/Edge 'History' SQLite — para modules/web/browser_history.py."""
+    FIXTURES_DIR.mkdir(exist_ok=True)
+    out_path = FIXTURES_DIR / "History"
+    if out_path.exists():
+        out_path.unlink()
+    conn = sqlite3.connect(out_path)
+    conn.execute(
+        "CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, "
+        "last_visit_time INTEGER)"
+    )
+    chrome_epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+    target = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    micros = int((target - chrome_epoch).total_seconds() * 1_000_000)
+    conn.execute(
+        "INSERT INTO urls (url, title, visit_count, last_visit_time) VALUES (?, ?, ?, ?)",
+        ("https://exemplo.com/pagina", "Página de teste", 3, micros),
+    )
+    conn.commit()
+    conn.close()
+    return out_path
+
+
+def make_gallery_fixture() -> Path:
+    """3 imagens (2 quase-idênticas + 1 bem diferente) para testar
+    core/image_hash.py (clustering por similaridade) e a galeria da GUI."""
+    from PIL import Image
+
+    out_dir = FIXTURES_DIR / "gallery"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+
+    img1 = Image.new("RGB", (32, 32))
+    for x in range(32):
+        for y in range(32):
+            img1.putpixel((x, y), (x * 8 % 256, y * 8 % 256, (x + y) * 4 % 256))
+    img1.save(out_dir / "photo_a.jpg", quality=90)
+
+    img2 = img1.copy()
+    img2.putpixel((0, 0), (255, 0, 0))
+    img2.save(out_dir / "photo_a_recompressed.jpg", quality=85)
+
+    img3 = Image.new("RGB", (32, 32), color=(10, 200, 30))
+    img3.save(out_dir / "photo_b_different.jpg", quality=90)
+
+    return out_dir
+
+
+def make_carving_fixture() -> Path:
+    """Blob raw com um JPEG e um PDF embutidos, sem nenhum sistema de
+    arquivos — para modules/disk/carving.py."""
+    from PIL import Image
+
+    FIXTURES_DIR.mkdir(exist_ok=True)
+    img_buffer = io.BytesIO()
+    Image.new("RGB", (16, 16), color=(50, 100, 150)).save(img_buffer, format="JPEG")
+    jpeg_bytes = img_buffer.getvalue()
+
+    pdf_bytes = b"%PDF-1.4\n1 0 obj<<>>endobj\n%%EOF"
+    blob = b"\x00" * 100 + jpeg_bytes + b"\x00" * 200 + pdf_bytes + b"\x00" * 50
+
+    out_path = FIXTURES_DIR / "sample_carving.bin"
+    out_path.write_bytes(blob)
+    return out_path
+
+
 def make_can_log() -> Path:
     FIXTURES_DIR.mkdir(exist_ok=True)
     out_path = FIXTURES_DIR / "sample_can.log"
@@ -708,6 +775,9 @@ if __name__ == "__main__":
     wa_key12, wa_crypt12 = make_whatsapp_crypt12_fixture()
     wa_key14, wa_crypt14 = make_whatsapp_crypt14_fixture()
     wa_key15, wa_crypt15 = make_whatsapp_crypt15_fixture()
+    history = make_browser_history_fixture()
+    gallery = make_gallery_fixture()
+    carving = make_carving_fixture()
     print(f"Backup Android: {ab}")
     print(f"Backup Android criptografado (senha: senha-conhecida-123): {ab_encrypted}")
     print(f"Imagem de disco (FAT32): {img}")
@@ -719,3 +789,6 @@ if __name__ == "__main__":
     print(f"WhatsApp crypt12: {wa_crypt12} (chave: {wa_key12})")
     print(f"WhatsApp crypt14: {wa_crypt14} (chave: {wa_key14})")
     print(f"WhatsApp crypt15: {wa_crypt15} (chave: {wa_key15})")
+    print(f"Histórico de navegador: {history}")
+    print(f"Galeria de imagens: {gallery}")
+    print(f"Blob para carving: {carving}")

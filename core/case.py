@@ -7,9 +7,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.config import Config
 from core.custody import CustodyLog, sha256_file, sha256_path
-from core.indexer import build_index, search as index_search
-from core.plugin import ModuleRegistry, build_default_registry
+from core.graph import build_contact_counts
+from core.indexer import build_index, image_clusters_report, load_known_hashes, pii_report, search as index_search
+from core.plugin import AnalysisContext, ModuleRegistry, build_default_registry
 from core.timeline import Event, Timeline
 
 
@@ -46,10 +48,15 @@ class Case:
         self.custody = CustodyLog()
         self.timeline = Timeline()
         self.created_at = datetime.now(timezone.utc).isoformat()
+        self.config = Config()
 
     @property
     def manifest_path(self) -> Path:
         return self.case_dir / "case.json"
+
+    @property
+    def config_path(self) -> Path:
+        return self.case_dir / "config.json"
 
     @property
     def timeline_path(self) -> Path:
@@ -68,6 +75,7 @@ class Case:
         case_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         case = cls(case_id, name, examiner, cases_dir)
         case.case_dir.mkdir(parents=True, exist_ok=True)
+        case.config.save(case.config_path)
         case.custody.record(examiner, "case_created", f"Caso '{name}' criado")
         case.save()
         return case
@@ -80,6 +88,7 @@ class Case:
         case.created_at = manifest["created_at"]
         case.evidence = [EvidenceItem.from_dict(e) for e in manifest["evidence"]]
         case.custody = CustodyLog.from_dict(manifest["custody"])
+        case.config = Config.load(case.config_path)
 
         if case.timeline_path.exists():
             events_data = json.loads(case.timeline_path.read_text(encoding="utf-8"))
@@ -121,9 +130,11 @@ class Case:
         actor: str = "system",
         credentials: dict[str, str] | None = None,
     ) -> None:
-        """`credentials` mapeia item_id -> senha já conhecida pelo examinador
-        (nunca é salva em disco — vive só na memória desta chamada)."""
-        registry = registry or build_default_registry()
+        """`credentials` mapeia item_id -> senha/chave já conhecida pelo
+        examinador (nunca é salva em disco — vive só na memória desta
+        chamada). Módulos desabilitados em self.config.disabled_modules
+        não rodam."""
+        registry = registry or build_default_registry(disabled_modules=set(self.config.disabled_modules))
         credentials = credentials or {}
         self.timeline = Timeline()  # recomputa do zero para não duplicar eventos em reanálises
         for item in self.evidence:
@@ -132,34 +143,76 @@ class Case:
             if not modules:
                 self.custody.record(actor, "analysis_skipped", f"item={item.item_id} nenhum módulo compatível")
                 continue
-            credential = credentials.get(item.item_id)
+            context = AnalysisContext(
+                credential=credentials.get(item.item_id),
+                extracted_dir=self.extracted_dir,
+                max_extract_size=self.config.max_extract_size_bytes,
+                keywords=self.config.keywords,
+            )
             for module in modules:
-                events = module.analyze(path, item.item_id, credential=credential, extracted_dir=self.extracted_dir)
+                events = module.analyze(path, item.item_id, context)
                 self.timeline.extend(events)
                 self.custody.record(
                     actor,
                     "analysis_run",
                     f"item={item.item_id} module={module.name} events={len(events)}"
-                    + (" credencial_fornecida=sim" if credential else ""),
+                    + (" credencial_fornecida=sim" if context.credential else ""),
                 )
         self.save()
 
     def run_processing(self, actor: str = "system") -> dict:
-        """Indexa (texto completo + categorização + dedup) tudo que os
-        módulos de análise extraíram para `self.extracted_dir`. Deve rodar
-        depois de run_analysis(). Inspirado no estágio de processamento do
-        IPED — ver core/indexer.py para o escopo exato."""
-        stats = build_index(self.extracted_dir, self.index_path)
+        """Indexa (texto completo + categorização + dedup + PII + clusters
+        de imagem) tudo que os módulos de análise extraíram para
+        `self.extracted_dir`, conforme self.config. Deve rodar depois de
+        run_analysis(). Inspirado no estágio de processamento do IPED —
+        ver core/indexer.py para o escopo exato."""
+        known_hashes = load_known_hashes(self.config.known_hash_ignore_file)
+        stats = build_index(
+            self.extracted_dir,
+            self.index_path,
+            known_hashes=known_hashes,
+            pii_enabled=self.config.pii_scan_enabled,
+            pii_patterns=self.config.pii_patterns,
+            image_clustering_enabled=self.config.image_clustering_enabled,
+            image_clustering_threshold=self.config.image_clustering_hamming_threshold,
+            ocr_enabled=self.config.ocr_enabled,
+        )
         self.custody.record(
             actor,
             "processing_run",
-            f"arquivos={stats['files']} indexados_texto={stats['indexed_text']} duplicados={stats['duplicates']}",
+            f"arquivos={stats['files']} indexados_texto={stats['indexed_text']} duplicados={stats['duplicates']} "
+            f"conhecidos_ignorados={stats['known_ignored']} pii_encontrados={stats['pii_hits']} "
+            f"clusters_de_imagem={stats['image_clusters']}",
         )
+
+        for keyword in self.config.keywords:
+            hits = self.search(keyword)
+            for hit in hits:
+                self.timeline.add(
+                    Event(
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        source_module="core.processing",
+                        event_type="keyword_hit",
+                        description=f"Palavra-chave '{keyword}' encontrada em {hit['path']}",
+                        evidence_item_id=hit["evidence_item_id"],
+                        metadata={"keyword": keyword, "path": hit["path"], "snippet": hit["snippet"]},
+                    )
+                )
+
         self.save()
         return stats
 
     def search(self, query: str, limit: int = 100) -> list[dict]:
         return index_search(self.index_path, query, limit=limit)
+
+    def pii_report(self) -> list[dict]:
+        return pii_report(self.index_path)
+
+    def image_clusters(self) -> dict[int, list[dict]]:
+        return image_clusters_report(self.index_path)
+
+    def contact_counts(self) -> dict[str, int]:
+        return build_contact_counts(self.timeline)
 
     def save(self) -> None:
         self.case_dir.mkdir(parents=True, exist_ok=True)

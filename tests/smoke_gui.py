@@ -41,6 +41,18 @@ def main() -> None:
     case_frame._run_search("Oi")
     app.update()
 
+    case_frame._refresh_gallery()
+    app.update()
+
+    case_frame._refresh_graph()
+    app.update()
+
+    case_frame._show_pii_report()
+    app.update()
+
+    gui_module.ConfigDialog(app, case).destroy()  # só testa que a janela constrói sem erro
+    app.update()
+
     print("EVIDENCE ROWS:", len(case_frame.evidence_tab.evidence_tree.get_children()))
     print("TIMELINE ROWS:", len(case_frame.timeline_tab.timeline_tree.get_children()))
     print("CUSTODY ROWS:", len(case_frame.custody_tab.custody_tree.get_children()))

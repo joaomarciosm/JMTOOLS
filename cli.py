@@ -68,10 +68,34 @@ def cmd_process(args: argparse.Namespace) -> None:
     case = Case.load(args.case, CASES_DIR)
     stats = case.run_processing(actor=args.examiner or case.examiner)
     print(f"Processamento concluído: {stats['files']} arquivos, {stats['indexed_text']} com texto indexado, "
-          f"{stats['duplicates']} duplicados.")
+          f"{stats['duplicates']} duplicados, {stats['known_ignored']} conhecidos/ignorados, "
+          f"{stats['pii_hits']} padroes sensiveis encontrados, {stats['image_clusters']} clusters de imagem, "
+          f"{stats['ocr_processed']} imagens com OCR.")
     for category, count in sorted(stats["categories"].items(), key=lambda kv: -kv[1]):
         print(f"  {category}: {count}")
     print(f"Índice salvo em: {case.index_path}")
+
+
+def cmd_pii_report(args: argparse.Namespace) -> None:
+    case = Case.load(args.case, CASES_DIR)
+    hits = case.pii_report()
+    if not hits:
+        print("Nenhum padrão sensível encontrado (rode 'process' antes).")
+        return
+    for h in hits:
+        print(f"[{h['type']}] {h['value']}  —  {h['path']} (item {h['evidence_item_id']})")
+
+
+def cmd_image_clusters(args: argparse.Namespace) -> None:
+    case = Case.load(args.case, CASES_DIR)
+    clusters = case.image_clusters()
+    if not clusters:
+        print("Nenhum cluster de imagens semelhantes encontrado (rode 'process' antes).")
+        return
+    for cluster_id, items in clusters.items():
+        print(f"Cluster {cluster_id} ({len(items)} imagens):")
+        for item in items:
+            print(f"  {item['path']} (item {item['evidence_item_id']})")
 
 
 def cmd_search(args: argparse.Namespace) -> None:
@@ -85,6 +109,16 @@ def cmd_search(args: argparse.Namespace) -> None:
         print(f"[{r['category']}] {r['path']}{dup}")
         if r["snippet"].strip():
             print(f"    {r['snippet']}")
+
+
+def cmd_graph(args: argparse.Namespace) -> None:
+    case = Case.load(args.case, CASES_DIR)
+    counts = case.contact_counts()
+    if not counts:
+        print("Nenhum contato encontrado na timeline (rode 'analyze' antes).")
+        return
+    for contact, count in counts.items():
+        print(f"{count:5d}  {contact}")
 
 
 def cmd_case_list(_args: argparse.Namespace) -> None:
@@ -146,6 +180,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query")
     p.add_argument("--limit", type=int, default=100)
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("pii-report", help="Listar padrões sensíveis encontrados (requer 'process' antes)")
+    p.add_argument("--case", required=True)
+    p.set_defaults(func=cmd_pii_report)
+
+    p = sub.add_parser("image-clusters", help="Listar grupos de imagens semelhantes (requer 'process' antes)")
+    p.add_argument("--case", required=True)
+    p.set_defaults(func=cmd_image_clusters)
+
+    p = sub.add_parser("graph", help="Listar contatos por frequência de comunicação (requer 'analyze' antes)")
+    p.add_argument("--case", required=True)
+    p.set_defaults(func=cmd_graph)
 
     return parser
 

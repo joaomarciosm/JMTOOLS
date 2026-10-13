@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.extraction import save_extracted_file
-from core.plugin import AnalysisModule
+from core.plugin import AnalysisContext, AnalysisModule
 from core.timeline import Event
 from modules.mobile.whatsapp_crypto import (
     SQLITE_MAGIC,
@@ -42,11 +42,8 @@ class WhatsAppModule(AnalysisModule):
     def supports(self, evidence_path: Path) -> bool:
         return evidence_path.is_file() and evidence_path.suffix.lower() in EXTENSIONS
 
-    def analyze(
-        self, evidence_path: Path, evidence_item_id: str,
-        credential: str | None = None, extracted_dir: Path | None = None,
-    ) -> list[Event]:
-        if not credential:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, context: AnalysisContext) -> list[Event]:
+        if not context.credential:
             return [
                 self._event(
                     evidence_item_id,
@@ -57,7 +54,7 @@ class WhatsAppModule(AnalysisModule):
             ]
 
         try:
-            key_payload = self._resolve_key_payload(credential)
+            key_payload = self._resolve_key_payload(context.credential)
             aes_key = derive_aes_key(key_payload)
             raw = evidence_path.read_bytes()
             suffix = evidence_path.suffix.lower()
@@ -97,8 +94,10 @@ class WhatsAppModule(AnalysisModule):
             db_path.write_bytes(plaintext)
             events.extend(self._scan_messages(db_path, evidence_item_id))
 
-        if extracted_dir is not None:
-            save_extracted_file(extracted_dir, evidence_item_id, f"{evidence_path.name}.decrypted.db", plaintext)
+        if context.extracted_dir is not None:
+            save_extracted_file(
+                context.extracted_dir, evidence_item_id, f"{evidence_path.name}.decrypted.db", plaintext
+            )
 
         return events
 
