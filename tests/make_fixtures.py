@@ -515,6 +515,173 @@ def make_ext4_image() -> Path:
     return out_path
 
 
+def _java_byte_array_stream(payload: bytes) -> bytes:
+    """Constrói o stream de serialização Java para um `byte[]` — formato
+    documentado publicamente pelo próprio protocolo de serialização da JVM
+    (Object Serialization Stream Protocol), não é específico do WhatsApp."""
+    out = bytearray()
+    out += bytes.fromhex("aced0005")  # STREAM_MAGIC, STREAM_VERSION
+    out += bytes.fromhex("7572")  # TC_ARRAY, TC_CLASSDESC
+    out += struct.pack(">H", 2) + b"[B"
+    out += bytes.fromhex("acf317f8060854e0")  # serialVersionUID de byte[]
+    out += bytes.fromhex("02")  # classDescFlags = SC_SERIALIZABLE
+    out += struct.pack(">H", 0)  # fieldCount = 0
+    out += bytes.fromhex("78")  # TC_ENDBLOCKDATA
+    out += bytes.fromhex("70")  # TC_NULL (sem superclasse)
+    out += struct.pack(">i", len(payload))
+    out += payload
+    return bytes(out)
+
+
+def _protobuf_varint(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def _protobuf_bytes_field(field_num: int, data: bytes) -> bytes:
+    tag = (field_num << 3) | 2
+    return _protobuf_varint(tag) + _protobuf_varint(len(data)) + data
+
+
+def make_whatsapp_crypt14_fixture(password_hint: str = "n/a") -> tuple[Path, Path]:
+    """Gera um par (arquivo de chave, arquivo .crypt14) válido de verdade,
+    para validar modules/mobile/whatsapp_crypto.py ponta a ponta."""
+    import os
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    FIXTURES_DIR.mkdir(exist_ok=True)
+
+    cipher_version = b"\x00\x01"
+    key_version = b"\x03"
+    server_salt = os.urandom(32)
+    google_id = os.urandom(16)
+    hashed_google_id = __import__("hashlib").sha256(google_id).digest()
+    iv_padding = b"\x00" * 16
+    aes_key = os.urandom(32)
+
+    key_payload = cipher_version + key_version + server_salt + google_id + hashed_google_id + iv_padding + aes_key
+    key_path = FIXTURES_DIR / "whatsapp_key14"
+    key_path.write_bytes(_java_byte_array_stream(key_payload))
+
+    plaintext_db = _build_minimal_whatsapp_sqlite()
+
+    iv = os.urandom(16)
+    c14cipher = (
+        _protobuf_bytes_field(1, cipher_version)
+        + _protobuf_bytes_field(2, key_version)
+        + _protobuf_bytes_field(3, server_salt)
+        + _protobuf_bytes_field(4, google_id)
+        + _protobuf_bytes_field(5, iv)
+    )
+    backup_prefix = _protobuf_bytes_field(2, c14cipher)  # campo 2 = wa_provided_key_data
+
+    ciphertext_and_tag = AESGCM(aes_key).encrypt(iv, plaintext_db, None)
+    checksum = __import__("hashlib").md5(
+        _protobuf_varint(len(backup_prefix)) + backup_prefix + ciphertext_and_tag
+    ).digest()
+
+    out = _protobuf_varint(len(backup_prefix)) + backup_prefix + ciphertext_and_tag + checksum
+    crypt_path = FIXTURES_DIR / "msgstore.db.crypt14"
+    crypt_path.write_bytes(out)
+
+    return key_path, crypt_path
+
+
+def make_whatsapp_crypt15_fixture() -> tuple[Path, Path]:
+    import os
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    FIXTURES_DIR.mkdir(exist_ok=True)
+
+    root_key = os.urandom(32)
+    key_path = FIXTURES_DIR / "whatsapp_key15"
+    key_path.write_bytes(_java_byte_array_stream(root_key))
+
+    aes_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"\x00" * 32, info=b"backup encryption").derive(root_key)
+
+    plaintext_db = _build_minimal_whatsapp_sqlite()
+    iv = os.urandom(16)
+    c15iv = _protobuf_bytes_field(1, iv)
+    backup_prefix = _protobuf_bytes_field(3, c15iv)  # campo 3 = e2ee_key_data
+
+    ciphertext_and_tag = AESGCM(aes_key).encrypt(iv, plaintext_db, None)
+    checksum = __import__("hashlib").md5(
+        _protobuf_varint(len(backup_prefix)) + backup_prefix + ciphertext_and_tag
+    ).digest()
+
+    out = _protobuf_varint(len(backup_prefix)) + backup_prefix + ciphertext_and_tag + checksum
+    crypt_path = FIXTURES_DIR / "msgstore.db.crypt15"
+    crypt_path.write_bytes(out)
+
+    return key_path, crypt_path
+
+
+def make_whatsapp_crypt12_fixture() -> tuple[Path, Path]:
+    import os
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    FIXTURES_DIR.mkdir(exist_ok=True)
+
+    cipher_version = b"\x00\x01"
+    key_version = b"\x03"
+    server_salt = os.urandom(32)
+    google_id = os.urandom(16)
+    hashed_google_id = __import__("hashlib").sha256(google_id).digest()
+    iv_padding = b"\x00" * 16
+    aes_key = os.urandom(32)
+
+    key_payload = cipher_version + key_version + server_salt + google_id + hashed_google_id + iv_padding + aes_key
+    key_path = FIXTURES_DIR / "whatsapp_key12"
+    key_path.write_bytes(_java_byte_array_stream(key_payload))
+
+    plaintext_db = _build_minimal_whatsapp_sqlite()
+    iv = os.urandom(16)
+    header = cipher_version + key_version + server_salt + google_id + iv
+    ciphertext_and_tag = AESGCM(aes_key).encrypt(iv, plaintext_db, None)
+    checksum = __import__("hashlib").md5(header + ciphertext_and_tag).digest()
+    jid_footer = b"--99"
+
+    out = header + ciphertext_and_tag + checksum + jid_footer
+    crypt_path = FIXTURES_DIR / "msgstore.db.crypt12"
+    crypt_path.write_bytes(out)
+    return key_path, crypt_path
+
+
+def _build_minimal_whatsapp_sqlite() -> bytes:
+    db_path = FIXTURES_DIR / "_wa_msgstore.db"
+    if db_path.exists():
+        db_path.unlink()
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE message (_id INTEGER PRIMARY KEY, key_remote_jid TEXT, timestamp INTEGER, data TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO message (key_remote_jid, timestamp, data) VALUES "
+        "('5511999999999@s.whatsapp.net', 1750000000000, 'Oi, tudo bem?')"
+    )
+    conn.execute(
+        "INSERT INTO message (key_remote_jid, timestamp, data) VALUES "
+        "('5511999999999@s.whatsapp.net', 1750000060000, 'Tudo sim, e você?')"
+    )
+    conn.commit()
+    conn.close()
+    data = db_path.read_bytes()
+    db_path.unlink()
+    return data
+
+
 def make_can_log() -> Path:
     FIXTURES_DIR.mkdir(exist_ok=True)
     out_path = FIXTURES_DIR / "sample_can.log"
@@ -538,6 +705,9 @@ if __name__ == "__main__":
     ios_dir = make_ios_backup()
     dvr_dir = make_dvr_folder()
     can_log = make_can_log()
+    wa_key12, wa_crypt12 = make_whatsapp_crypt12_fixture()
+    wa_key14, wa_crypt14 = make_whatsapp_crypt14_fixture()
+    wa_key15, wa_crypt15 = make_whatsapp_crypt15_fixture()
     print(f"Backup Android: {ab}")
     print(f"Backup Android criptografado (senha: senha-conhecida-123): {ab_encrypted}")
     print(f"Imagem de disco (FAT32): {img}")
@@ -546,3 +716,6 @@ if __name__ == "__main__":
     print(f"Backup iOS: {ios_dir}")
     print(f"Pasta DVR: {dvr_dir}")
     print(f"Log CAN: {can_log}")
+    print(f"WhatsApp crypt12: {wa_crypt12} (chave: {wa_key12})")
+    print(f"WhatsApp crypt14: {wa_crypt14} (chave: {wa_key14})")
+    print(f"WhatsApp crypt15: {wa_crypt15} (chave: {wa_key15})")

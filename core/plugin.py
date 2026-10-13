@@ -55,6 +55,7 @@ def build_default_registry() -> ModuleRegistry:
 
     from modules.mobile.android_backup import AndroidBackupModule
     from modules.mobile.ios_backup import IOSBackupModule
+    from modules.mobile.whatsapp import WhatsAppModule
     from modules.disk.filesystem import DiskImageModule
     from modules.dvr.recordings import DVRRecordingsModule
     from modules.iot.logs import IoTLogModule
@@ -62,6 +63,7 @@ def build_default_registry() -> ModuleRegistry:
 
     registry.register(AndroidBackupModule())
     registry.register(IOSBackupModule())
+    registry.register(WhatsAppModule())
     registry.register(DiskImageModule())
     registry.register(DVRRecordingsModule())
     registry.register(IoTLogModule())

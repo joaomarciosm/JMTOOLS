@@ -257,10 +257,14 @@ class CaseFrame(ttk.Frame):
             return
 
         password = simpledialog.askstring(
-            "Senha (opcional)",
-            "Se este item for um backup com senha já conhecida (ex: backup Android "
-            "criptografado), informe a senha agora. Deixe em branco se não tiver senha.\n\n"
-            "A senha fica só em memória nesta sessão — nunca é salva no caso.",
+            "Senha / chave (opcional)",
+            "Se este item precisar de uma credencial já conhecida para decodificar, informe "
+            "agora:\n"
+            "- Backup Android (.ab) criptografado: a senha\n"
+            "- WhatsApp (.crypt12/.crypt14/.crypt15): o caminho do arquivo de chave "
+            "(ou a chave hex de 64 dígitos, só para .crypt15)\n\n"
+            "Deixe em branco se este item não precisar. Fica só em memória nesta sessão — "
+            "nunca é salva no caso.",
             show="*",
         )
         if password:
