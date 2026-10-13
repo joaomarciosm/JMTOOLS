@@ -41,7 +41,7 @@ class IoTLogModule(AnalysisModule):
             return False
         return any(self._is_log_file(p) for p in evidence_path.rglob("*") if p.is_file())
 
-    def analyze(self, evidence_path: Path, evidence_item_id: str) -> list[Event]:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
         events: list[Event] = []
         for path in evidence_path.rglob("*"):
             if not path.is_file() or not self._is_log_file(path):

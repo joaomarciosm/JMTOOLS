@@ -64,7 +64,7 @@ class DiskImageModule(AnalysisModule):
             return False
         return len(boot_sector) == SECTOR_SIZE and boot_sector[510:512] == b"\x55\xaa"
 
-    def analyze(self, evidence_path: Path, evidence_item_id: str) -> list[Event]:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
         events: list[Event] = []
         with open(evidence_path, "rb") as f:
             boot_sector = f.read(SECTOR_SIZE)

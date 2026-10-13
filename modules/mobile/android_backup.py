@@ -10,10 +10,10 @@ android-backup-extractor):
     [resto]: payload (tar, opcionalmente zlib-compressed, opcionalmente
               criptografado com a senha que o dono do backup definiu)
 
-Este módulo processa backups **não criptografados**. Backups criptografados
-são detectados e reportados, mas a decodificação (que exigiria implementar
-corretamente o KDF/AES do AOSP e validar contra vetores de teste reais) ainda
-não está implementada aqui — ver docs/roadmap.md.
+Backups criptografados (linha 4 = "AES-256") são decodificados quando o
+examinador fornece a senha (já conhecida legalmente — ver
+modules/mobile/android_crypto.py para o algoritmo e seu escopo/limites).
+Sem senha, o módulo apenas reporta que o backup está criptografado.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from pathlib import Path
 
 from core.plugin import AnalysisModule
 from core.timeline import Event
+from modules.mobile.android_crypto import AndroidBackupDecryptError, decrypt_backup
 
 MAGIC = b"ANDROID BACKUP"
 
@@ -43,7 +44,7 @@ class AndroidBackupModule(AnalysisModule):
         except OSError:
             return False
 
-    def analyze(self, evidence_path: Path, evidence_item_id: str) -> list[Event]:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
         events: list[Event] = []
         with open(evidence_path, "rb") as f:
             raw = f.read()
@@ -52,29 +53,69 @@ class AndroidBackupModule(AnalysisModule):
         version, compressed, encryption = header_lines[1], header_lines[2], header_lines[3]
 
         if encryption.lower() != "none":
+            if not credential:
+                events.append(
+                    self._event(
+                        evidence_item_id,
+                        "backup_encrypted",
+                        f"Backup Android criptografado ({encryption}); forneça a senha conhecida "
+                        "pelo examinador para decodificar.",
+                    )
+                )
+                return events
+
+            crypto_lines, payload_offset = self._split_header(raw, start_offset=payload_offset, count=5)
+            try:
+                user_salt = bytes.fromhex(crypto_lines[0])
+                rounds = int(crypto_lines[2])
+                user_iv = bytes.fromhex(crypto_lines[3])
+                master_key_blob = bytes.fromhex(crypto_lines[4])
+                payload = decrypt_backup(
+                    credential, user_salt, rounds, user_iv, master_key_blob, raw[payload_offset:]
+                )
+            except (AndroidBackupDecryptError, ValueError) as exc:
+                events.append(
+                    self._event(
+                        evidence_item_id,
+                        "backup_decrypt_failed",
+                        f"Falha ao decodificar backup com a senha fornecida: {exc}",
+                    )
+                )
+                return events
+        else:
+            payload = raw[payload_offset:]
+
+        if compressed == "1":
+            try:
+                payload = zlib.decompress(payload)
+            except zlib.error as exc:
+                events.append(
+                    self._event(
+                        evidence_item_id,
+                        "backup_decrypt_failed",
+                        f"Payload decriptado não é um stream zlib válido (senha incorreta?): {exc}",
+                    )
+                )
+                return events
+
+        try:
+            with tarfile.open(fileobj=io.BytesIO(payload)) as tar:
+                events.extend(self._scan_tar(tar, evidence_item_id))
+        except tarfile.TarError as exc:
             events.append(
                 self._event(
                     evidence_item_id,
-                    "backup_encrypted",
-                    f"Backup Android criptografado ({encryption}); decodificação não implementada "
-                    "neste módulo — requer senha conhecida pelo examinador e validação do KDF/AES.",
+                    "backup_decrypt_failed",
+                    f"Payload não é um tar válido (senha incorreta?): {exc}",
                 )
             )
-            return events
-
-        payload = raw[payload_offset:]
-        if compressed == "1":
-            payload = zlib.decompress(payload)
-
-        with tarfile.open(fileobj=io.BytesIO(payload)) as tar:
-            events.extend(self._scan_tar(tar, evidence_item_id))
 
         return events
 
-    def _split_header(self, raw: bytes) -> tuple[list[str], int]:
+    def _split_header(self, raw: bytes, start_offset: int = 0, count: int = 4) -> tuple[list[str], int]:
         lines = []
-        offset = 0
-        for _ in range(4):
+        offset = start_offset
+        for _ in range(count):
             nl = raw.index(b"\n", offset)
             lines.append(raw[offset:nl].decode("utf-8", errors="replace"))
             offset = nl + 1

@@ -5,6 +5,7 @@ Exemplos:
     python cli.py case-new --name "Caso 001" --examiner "Fulano"
     python cli.py evidence-add --case 20261012-... --path backup.ab --desc "Backup do celular do investigado"
     python cli.py analyze --case 20261012-...
+    python cli.py analyze --case 20261012-... --password abc123=senha-do-backup
     python cli.py timeline --case 20261012-...
 """
 from __future__ import annotations
@@ -34,7 +35,14 @@ def cmd_evidence_add(args: argparse.Namespace) -> None:
 
 def cmd_analyze(args: argparse.Namespace) -> None:
     case = Case.load(args.case, CASES_DIR)
-    case.run_analysis(actor=args.examiner or case.examiner)
+    credentials: dict[str, str] = {}
+    for entry in args.password or []:
+        item_id, _, password = entry.partition("=")
+        if not password:
+            print(f"Aviso: --password '{entry}' ignorado (formato esperado: ITEM_ID=senha)")
+            continue
+        credentials[item_id] = password
+    case.run_analysis(actor=args.examiner or case.examiner, credentials=credentials)
     print(f"Análise concluída. {len(case.timeline)} eventos na timeline.")
     print(f"Timeline salva em: {case.timeline_path}")
 
@@ -87,6 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("analyze", help="Rodar todos os módulos compatíveis sobre as evidências do caso")
     p.add_argument("--case", required=True)
     p.add_argument("--examiner", default=None)
+    p.add_argument(
+        "--password", action="append", metavar="ITEM_ID=senha",
+        help="Senha já conhecida para decodificar um item criptografado (repetível). "
+             "Nunca é salva em disco.",
+    )
     p.set_defaults(func=cmd_analyze)
 
     p = sub.add_parser("timeline", help="Exibir a timeline agregada do caso")

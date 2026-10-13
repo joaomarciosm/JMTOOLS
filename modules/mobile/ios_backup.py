@@ -33,7 +33,7 @@ class IOSBackupModule(AnalysisModule):
     def supports(self, evidence_path: Path) -> bool:
         return evidence_path.is_dir() and (evidence_path / "Manifest.db").exists()
 
-    def analyze(self, evidence_path: Path, evidence_item_id: str) -> list[Event]:
+    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
         events: list[Event] = []
 
         manifest_plist_path = evidence_path / "Manifest.plist"

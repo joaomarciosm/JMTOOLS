@@ -144,6 +144,7 @@ class CaseFrame(ttk.Frame):
         super().__init__(parent, padding=12)
         self.app = app
         self.case = case
+        self.credentials: dict[str, str] = {}  # item_id -> senha; só em memória, nunca salvo em disco
 
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, 8))
@@ -156,6 +157,7 @@ class CaseFrame(ttk.Frame):
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="+ Evidência (arquivo)", command=self._add_evidence_file).pack(side="left", padx=2)
         ttk.Button(toolbar, text="+ Evidência (pasta)", command=self._add_evidence_folder).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="🔑 Definir senha", command=self._set_credential).pack(side="left", padx=2)
         ttk.Button(toolbar, text="▶ Analisar", command=self._run_analysis).pack(side="left", padx=2)
         ttk.Button(toolbar, text="✔ Verificar integridade", command=self._verify_integrity).pack(side="left", padx=2)
         ttk.Button(toolbar, text="📄 Gerar laudo", command=self._generate_report).pack(side="left", padx=2)
@@ -249,19 +251,46 @@ class CaseFrame(ttk.Frame):
         self.status_var.set(f"Calculando hash de {path.name}...")
         self.update_idletasks()
         try:
-            self.case.add_evidence(path, description=desc, actor=self.case.examiner)
+            item = self.case.add_evidence(path, description=desc, actor=self.case.examiner)
         except OSError as exc:
             messagebox.showerror("Erro ao adicionar evidência", str(exc))
             return
+
+        password = simpledialog.askstring(
+            "Senha (opcional)",
+            "Se este item for um backup com senha já conhecida (ex: backup Android "
+            "criptografado), informe a senha agora. Deixe em branco se não tiver senha.\n\n"
+            "A senha fica só em memória nesta sessão — nunca é salva no caso.",
+            show="*",
+        )
+        if password:
+            self.credentials[item.item_id] = password
+
         self.status_var.set("Evidência adicionada.")
         self._refresh_all()
+
+    def _set_credential(self) -> None:
+        if not self.case.evidence:
+            messagebox.showinfo("Sem evidências", "Adicione uma evidência primeiro.")
+            return
+        item_id = simpledialog.askstring(
+            "Definir senha", "ID do item de evidência (veja a aba Evidências):"
+        )
+        if not item_id or item_id not in {e.item_id for e in self.case.evidence}:
+            if item_id:
+                messagebox.showwarning("ID inválido", f"Nenhum item com ID '{item_id}' neste caso.")
+            return
+        password = simpledialog.askstring("Senha", f"Senha para o item {item_id}:", show="*")
+        if password:
+            self.credentials[item_id] = password
+            self.status_var.set(f"Senha definida para o item {item_id}. Rode Analisar para aplicar.")
 
     def _run_analysis(self) -> None:
         self.status_var.set("Analisando evidências, por favor aguarde...")
         self.update_idletasks()
 
         def worker() -> None:
-            self.case.run_analysis(actor=self.case.examiner)
+            self.case.run_analysis(actor=self.case.examiner, credentials=self.credentials)
             self.after(0, self._on_analysis_done)
 
         threading.Thread(target=worker, daemon=True).start()

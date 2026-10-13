@@ -46,6 +46,61 @@ def make_android_backup() -> Path:
     return out_path
 
 
+def make_encrypted_android_backup(password: str = "senha-conhecida-123") -> Path:
+    """Backup .ab criptografado de verdade (AES-256), para validar
+    modules/mobile/android_crypto.py ponta a ponta."""
+    import os
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+    FIXTURES_DIR.mkdir(exist_ok=True)
+
+    def pkcs7_pad(data: bytes, block_size: int = 16) -> bytes:
+        pad_len = block_size - (len(data) % block_size)
+        return data + bytes([pad_len]) * pad_len
+
+    def pbkdf2(password_bytes: bytes, salt: bytes, rounds: int, length: int) -> bytes:
+        return PBKDF2HMAC(algorithm=hashes.SHA1(), length=length, salt=salt, iterations=rounds).derive(password_bytes)
+
+    def aes_cbc_encrypt(key: bytes, iv: bytes, plaintext: bytes) -> bytes:
+        encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+        return encryptor.update(plaintext) + encryptor.finalize()
+
+    tar_buffer = io.BytesIO()
+    with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+        info = tarfile.TarInfo(name="apps/com.example/f/segredo.txt")
+        data = b"conteudo sigiloso dentro do backup criptografado"
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    compressed_tar = zlib.compress(tar_buffer.getvalue())
+
+    rounds = 10000
+    user_salt = os.urandom(64)
+    checksum_salt = os.urandom(64)
+    user_iv = os.urandom(16)
+    master_key = os.urandom(32)
+    master_iv = os.urandom(16)
+
+    checksum = pbkdf2(master_key, checksum_salt, rounds, 32)
+    master_key_blob_plain = bytes([len(master_iv)]) + master_iv + bytes([len(master_key)]) + master_key + bytes([len(checksum)]) + checksum
+
+    user_key = pbkdf2(password.encode("utf-8"), user_salt, rounds, 32)
+    master_key_blob_encrypted = aes_cbc_encrypt(user_key, user_iv, pkcs7_pad(master_key_blob_plain))
+
+    encrypted_payload = aes_cbc_encrypt(master_key, master_iv, pkcs7_pad(compressed_tar))
+
+    header = (
+        "ANDROID BACKUP\n5\n1\nAES-256\n"
+        f"{user_salt.hex()}\n{checksum_salt.hex()}\n{rounds}\n{user_iv.hex()}\n{master_key_blob_encrypted.hex()}\n"
+    ).encode("utf-8")
+
+    out_path = FIXTURES_DIR / "sample_backup_encrypted.ab"
+    out_path.write_bytes(header + encrypted_payload)
+    return out_path
+
+
 def _fat_dir_entry(name: str, ext: str, attr: int, first_cluster: int, size: int, deleted: bool = False) -> bytes:
     entry = bytearray(32)
     entry[0:8] = name.ljust(8)[:8].encode("ascii")
@@ -372,12 +427,14 @@ def make_can_log() -> Path:
 
 if __name__ == "__main__":
     ab = make_android_backup()
+    ab_encrypted = make_encrypted_android_backup()
     img = make_disk_image()
     ntfs_img = make_ntfs_image()
     ios_dir = make_ios_backup()
     dvr_dir = make_dvr_folder()
     can_log = make_can_log()
     print(f"Backup Android: {ab}")
+    print(f"Backup Android criptografado (senha: senha-conhecida-123): {ab_encrypted}")
     print(f"Imagem de disco (FAT32): {img}")
     print(f"Imagem de disco (NTFS): {ntfs_img}")
     print(f"Backup iOS: {ios_dir}")

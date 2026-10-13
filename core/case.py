@@ -106,8 +106,16 @@ class Case:
         self.save()
         return ok
 
-    def run_analysis(self, registry: ModuleRegistry | None = None, actor: str = "system") -> None:
+    def run_analysis(
+        self,
+        registry: ModuleRegistry | None = None,
+        actor: str = "system",
+        credentials: dict[str, str] | None = None,
+    ) -> None:
+        """`credentials` mapeia item_id -> senha já conhecida pelo examinador
+        (nunca é salva em disco — vive só na memória desta chamada)."""
         registry = registry or build_default_registry()
+        credentials = credentials or {}
         self.timeline = Timeline()  # recomputa do zero para não duplicar eventos em reanálises
         for item in self.evidence:
             path = Path(item.source_path)
@@ -115,13 +123,15 @@ class Case:
             if not modules:
                 self.custody.record(actor, "analysis_skipped", f"item={item.item_id} nenhum módulo compatível")
                 continue
+            credential = credentials.get(item.item_id)
             for module in modules:
-                events = module.analyze(path, item.item_id)
+                events = module.analyze(path, item.item_id, credential=credential)
                 self.timeline.extend(events)
                 self.custody.record(
                     actor,
                     "analysis_run",
-                    f"item={item.item_id} module={module.name} events={len(events)}",
+                    f"item={item.item_id} module={module.name} events={len(events)}"
+                    + (" credencial_fornecida=sim" if credential else ""),
                 )
         self.save()
 

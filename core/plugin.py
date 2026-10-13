@@ -25,8 +25,13 @@ class AnalysisModule(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def analyze(self, evidence_path: Path, evidence_item_id: str) -> list[Event]:
-        """Processa a evidência e retorna uma lista de eventos de timeline."""
+    def analyze(self, evidence_path: Path, evidence_item_id: str, credential: str | None = None) -> list[Event]:
+        """Processa a evidência e retorna uma lista de eventos de timeline.
+
+        `credential` é uma senha que o examinador já conhece legalmente (ex:
+        senha de backup definida pelo dono do aparelho) — usada apenas para
+        decodificar dados já adquiridos, nunca para descobrir/quebrar uma
+        senha desconhecida. Nunca é persistida no caso nem no laudo."""
         raise NotImplementedError
 
 

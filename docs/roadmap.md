@@ -3,7 +3,7 @@
 ## Implementado
 
 - **core**: caso, cadeia de custódia (hash SHA-256 de arquivo ou pasta + log de ações), timeline unificada, registro de plugins, geração de laudo em Markdown.
-- **mobile.android_backup**: backups Android ADB (`.ab`) não criptografados — extração do tar, listagem de arquivos, parsing de SMS e chamadas em qualquer tabela SQLite com colunas compatíveis.
+- **mobile.android_backup**: backups Android ADB (`.ab`) — extração do tar, listagem de arquivos, parsing de SMS e chamadas em qualquer tabela SQLite com colunas compatíveis. **Suporta backups criptografados (AES-256) quando o examinador fornece a senha já conhecida** (algoritmo documentado do AOSP: PBKDF2-SHA1 + AES-256-CBC; validado via padding PKCS7 e abertura do tar — ver `modules/mobile/android_crypto.py` para o escopo exato).
 - **mobile.ios_backup**: backups iOS/iTunes/Finder não criptografados — leitura do `Manifest.db`, resolução de `fileID` para arquivo físico, parsing de `sms.db` (iMessage/SMS) e `call_history`.
 - **disk.image**: imagens raw (dd/img) — tabela de partições MBR e GPT, detecção de sistema de arquivos (NTFS, exFAT, FAT12/16/32, ext2/3/4), **listagem completa de arquivos e detecção de arquivos deletados em FAT32 e NTFS** (parsers próprios: FAT32 — BPB, cadeia de clusters via FAT, entradas 8.3 + LFN; NTFS — fixup de registros MFT, decodificação de data runs, varredura completa da $MFT com reconstrução de caminho via atributo $FILE_NAME, sem depender do parser de árvore B+ dos índices).
 - **dvr.recordings**: varre pasta de armazenamento de DVR já extraída, lista vídeos por assinatura/extensão conhecida, extrai `creation_time`/duração de contêineres MP4/MOV padrão (caixa `mvhd`, ISO/IEC 14496-12).
@@ -15,7 +15,8 @@ Todos os módulos têm teste de ponta a ponta com fixtures sintéticas em `tests
 ## Planejado — expansão por módulo
 
 ### mobile
-- Decodificação de backup Android/iOS **criptografado** com senha conhecida pelo examinador (KDF/AES documentado pelo AOSP / keybag do iOS) — precisa de vetores de teste reais antes de confiar em laudo.
+- Decodificação de backup Android com checagem do checksum MAC do cabeçalho (hoje validamos só via padding PKCS7 + abertura do tar — funciona, mas não replica a verificação de integridade original do Android, que tem duas variantes históricas incompatíveis por um bug de charset entre versões).
+- Decodificação de backup **iOS** criptografado com senha conhecida (keybag do iOS, formato mais complexo que o do Android — múltiplas "class keys" envolvidas).
 - Parsing de artefatos de apps específicos (WhatsApp `msgstore.db` criptografado com crypt14/15, Telegram) — formato e criptografia variam por versão do app.
 
 ### disk
