@@ -111,6 +111,110 @@ def cmd_search(args: argparse.Namespace) -> None:
             print(f"    {r['snippet']}")
 
 
+def cmd_android_devices(_args: argparse.Namespace) -> None:
+    import core.android_adb as adb
+    if not adb.is_available():
+        print("adb não encontrado no PATH — instale o Android SDK Platform Tools.")
+        return
+    for d in adb.list_devices():
+        print(f"{d['serial']}  ({d['state']})")
+
+
+def cmd_android_info(args: argparse.Namespace) -> None:
+    import core.android_adb as adb
+    info = adb.device_info(serial=args.serial)
+    for k, v in info.items():
+        print(f"{k}: {v}")
+
+
+def cmd_android_backup(args: argparse.Namespace) -> None:
+    import core.android_adb as adb
+    print("Confirme no aparelho a tela de backup (e defina uma senha lá, se quiser) para continuar...")
+    path = adb.full_backup(Path(args.output), serial=args.serial)
+    print(f"Backup salvo em: {path}")
+
+
+def cmd_android_pull_ext(args: argparse.Namespace) -> None:
+    import core.android_adb as adb
+    paths = adb.find_paths_by_extension(args.ext, serial=args.serial)
+    print(f"{len(paths)} arquivo(s) encontrado(s). Copiando...")
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for p in paths:
+        adb.pull_path(p, out_dir, serial=args.serial)
+    print(f"Copiado para: {out_dir}")
+
+
+def cmd_android_trash(args: argparse.Namespace) -> None:
+    import core.android_adb as adb
+    paths = adb.find_trash_paths(serial=args.serial)
+    if not paths:
+        print("Nenhuma pasta de lixeira encontrada.")
+        return
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for p in paths:
+        print(f"  {p}")
+        adb.pull_path(p, out_dir, serial=args.serial)
+    print(f"Copiado para: {out_dir}")
+
+
+def cmd_android_dumpsys(args: argparse.Namespace) -> None:
+    import core.android_adb as adb
+    if args.service:
+        print(adb.dumpsys(args.service, args.extra or "", serial=args.serial))
+    else:
+        for s in adb.dumpsys_services(serial=args.serial):
+            print(s)
+
+
+def cmd_android_downgrade_backup(args: argparse.Namespace) -> None:
+    import core.android_adb as adb
+    print(f"Reinstalando {args.apk} sobre {args.package} (mantendo dados) e tirando backup...")
+    path = adb.downgrade_and_backup(args.package, Path(args.apk), Path(args.output), serial=args.serial)
+    print(f"Backup salvo em: {path}")
+
+
+def cmd_ios_devices(_args: argparse.Namespace) -> None:
+    import core.ios_libimobiledevice as idev
+    if not idev.is_available():
+        print(f"Ferramentas faltando no PATH: {', '.join(idev.missing_tools())} — instale libimobiledevice.")
+        return
+    for udid in idev.list_devices():
+        print(udid)
+
+
+def cmd_ios_info(args: argparse.Namespace) -> None:
+    import core.ios_libimobiledevice as idev
+    info = idev.device_info(udid=args.udid)
+    for k, v in info.items():
+        print(f"{k}: {v}")
+
+
+def cmd_ios_screenshot(args: argparse.Namespace) -> None:
+    import core.ios_libimobiledevice as idev
+    path = idev.take_screenshot(Path(args.output), udid=args.udid)
+    print(f"Screenshot salvo em: {path}")
+
+
+def cmd_ios_backup(args: argparse.Namespace) -> None:
+    import core.ios_libimobiledevice as idev
+    if args.password:
+        print("Ligando criptografia do backup com a senha fornecida (necessário para incluir o chaveiro)...")
+        idev.set_backup_password(args.password, udid=args.udid)
+    path = idev.full_backup(Path(args.output), udid=args.udid)
+    print(f"Backup salvo em: {path}")
+
+
+def cmd_launch_iped(args: argparse.Namespace) -> None:
+    from core.external_tools import run_iped
+    case = Case.load(args.case, CASES_DIR)
+    output_dir = case.case_dir / "iped_output"
+    print(f"Rodando IPED sobre {case.extracted_dir} -> {output_dir} ...")
+    run_iped(Path(args.iped_exe), case.extracted_dir, output_dir)
+    print(f"Concluído. Resultado em: {output_dir}")
+
+
 def cmd_graph(args: argparse.Namespace) -> None:
     case = Case.load(args.case, CASES_DIR)
     counts = case.contact_counts()
@@ -192,6 +296,77 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("graph", help="Listar contatos por frequência de comunicação (requer 'analyze' antes)")
     p.add_argument("--case", required=True)
     p.set_defaults(func=cmd_graph)
+
+    # ---- Aquisição Android via ADB (aparelho já conectado e com depuração USB autorizada) ----
+
+    p = sub.add_parser("android-devices", help="Listar aparelhos Android conectados via ADB")
+    p.set_defaults(func=cmd_android_devices)
+
+    p = sub.add_parser("android-info", help="Informações do aparelho Android conectado")
+    p.add_argument("--serial", default=None)
+    p.set_defaults(func=cmd_android_info)
+
+    p = sub.add_parser("android-backup", help="Backup completo via 'adb backup' (confirme no aparelho)")
+    p.add_argument("--output", required=True, help="Caminho do arquivo .ab de saída")
+    p.add_argument("--serial", default=None)
+    p.set_defaults(func=cmd_android_backup)
+
+    p = sub.add_parser("android-pull-ext", help="Copiar todos os arquivos de uma extensão do /sdcard")
+    p.add_argument("--ext", required=True, help="Extensão sem ponto, ex: jpg")
+    p.add_argument("--output", required=True)
+    p.add_argument("--serial", default=None)
+    p.set_defaults(func=cmd_android_pull_ext)
+
+    p = sub.add_parser("android-trash", help="Copiar pastas de lixeira de apps (ex: WhatsApp/.Trash)")
+    p.add_argument("--output", required=True)
+    p.add_argument("--serial", default=None)
+    p.set_defaults(func=cmd_android_trash)
+
+    p = sub.add_parser("android-dumpsys", help="Listar serviços dumpsys ou rodar um específico")
+    p.add_argument("--service", default=None, help="Nome do serviço (ex: battery); omita para listar todos")
+    p.add_argument("--extra", default=None, help="Argumentos extras do dumpsys")
+    p.add_argument("--serial", default=None)
+    p.set_defaults(func=cmd_android_dumpsys)
+
+    p = sub.add_parser(
+        "android-downgrade-backup",
+        help="Reinstalar versão mais antiga (fornecida por você) de um app e tirar backup dele",
+    )
+    p.add_argument("--package", required=True, help="Ex: com.whatsapp")
+    p.add_argument("--apk", required=True, help="Caminho do APK mais antigo, legítimo, já obtido por você")
+    p.add_argument("--output", required=True, help="Caminho do .ab de saída")
+    p.add_argument("--serial", default=None)
+    p.set_defaults(func=cmd_android_downgrade_backup)
+
+    # ---- Aquisição iOS via libimobiledevice (aparelho já pareado/confiado) ----
+
+    p = sub.add_parser("ios-devices", help="Listar aparelhos iOS conectados")
+    p.set_defaults(func=cmd_ios_devices)
+
+    p = sub.add_parser("ios-info", help="Informações do aparelho iOS conectado")
+    p.add_argument("--udid", default=None)
+    p.set_defaults(func=cmd_ios_info)
+
+    p = sub.add_parser("ios-screenshot", help="Tirar screenshot da tela do aparelho iOS")
+    p.add_argument("--output", required=True)
+    p.add_argument("--udid", default=None)
+    p.set_defaults(func=cmd_ios_screenshot)
+
+    p = sub.add_parser("ios-backup", help="Backup completo via idevicebackup2")
+    p.add_argument("--output", required=True, help="Pasta de saída do backup")
+    p.add_argument(
+        "--password", default=None,
+        help="Se informado, liga a criptografia do backup com essa senha antes (inclui o chaveiro)",
+    )
+    p.add_argument("--udid", default=None)
+    p.set_defaults(func=cmd_ios_backup)
+
+    # ---- Integração com ferramentas externas ----
+
+    p = sub.add_parser("launch-iped", help="Rodar o IPED de verdade (se instalado) sobre os arquivos extraídos do caso")
+    p.add_argument("--case", required=True)
+    p.add_argument("--iped-exe", required=True, help="Caminho do iped.exe instalado")
+    p.set_defaults(func=cmd_launch_iped)
 
     return parser
 

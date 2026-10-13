@@ -7,10 +7,13 @@ import plistlib
 import shutil
 import sqlite3
 import struct
+import sys
 import tarfile
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -749,6 +752,51 @@ def make_carving_fixture() -> Path:
     return out_path
 
 
+def make_whatsapp_media_fixture() -> Path:
+    """Pasta simulando um sandbox do app WhatsApp extraído (db de mídia +
+    arquivo de mídia cifrado) — para modules/mobile/whatsapp_media.py."""
+    import hmac
+    import os
+    from hashlib import sha256
+
+    from cryptography.hazmat.primitives import hashes, padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    from modules.mobile.whatsapp_media_crypto import HKDF_INFO_BY_MEDIA_TYPE
+
+    def encrypt_media(media_key: bytes, plaintext: bytes, media_type: str) -> bytes:
+        info = HKDF_INFO_BY_MEDIA_TYPE[media_type]
+        derived = HKDF(algorithm=hashes.SHA256(), length=112, salt=b"\x00" * 32, info=info).derive(media_key)
+        iv, cipher_key, mac_key = derived[0:16], derived[16:48], derived[48:80]
+        padder = padding.PKCS7(128).padder()
+        padded = padder.update(plaintext) + padder.finalize()
+        encryptor = Cipher(algorithms.AES(cipher_key), modes.CBC(iv)).encryptor()
+        ciphertext = encryptor.update(padded) + encryptor.finalize()
+        mac = hmac.new(mac_key, iv + ciphertext, sha256).digest()[:10]
+        return ciphertext + mac
+
+    out_dir = FIXTURES_DIR / "whatsapp_media_sandbox"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    (out_dir / "Media").mkdir(parents=True)
+
+    media_key = os.urandom(32)
+    photo_bytes = b"FAKE_JPEG_BYTES_FOR_TEST" * 20
+    (out_dir / "Media" / "IMG-0001.jpg.enc").write_bytes(encrypt_media(media_key, photo_bytes, "image"))
+
+    conn = sqlite3.connect(out_dir / "msgstore.db")
+    conn.execute("CREATE TABLE message_media (_id INTEGER PRIMARY KEY, media_key BLOB, file_path TEXT, mimetype TEXT)")
+    conn.execute(
+        "INSERT INTO message_media (media_key, file_path, mimetype) VALUES (?, ?, ?)",
+        (media_key, "Media/IMG-0001.jpg.enc", "image/jpeg"),
+    )
+    conn.commit()
+    conn.close()
+
+    return out_dir
+
+
 def make_can_log() -> Path:
     FIXTURES_DIR.mkdir(exist_ok=True)
     out_path = FIXTURES_DIR / "sample_can.log"
@@ -778,6 +826,7 @@ if __name__ == "__main__":
     history = make_browser_history_fixture()
     gallery = make_gallery_fixture()
     carving = make_carving_fixture()
+    wa_media = make_whatsapp_media_fixture()
     print(f"Backup Android: {ab}")
     print(f"Backup Android criptografado (senha: senha-conhecida-123): {ab_encrypted}")
     print(f"Imagem de disco (FAT32): {img}")
@@ -792,3 +841,4 @@ if __name__ == "__main__":
     print(f"Histórico de navegador: {history}")
     print(f"Galeria de imagens: {gallery}")
     print(f"Blob para carving: {carving}")
+    print(f"Sandbox de mídia do WhatsApp: {wa_media}")

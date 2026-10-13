@@ -87,6 +87,7 @@ def build_default_registry(disabled_modules: set[str] | None = None) -> ModuleRe
     from modules.mobile.android_backup import AndroidBackupModule
     from modules.mobile.ios_backup import IOSBackupModule
     from modules.mobile.whatsapp import WhatsAppModule
+    from modules.mobile.whatsapp_media import WhatsAppMediaModule
     from modules.vehicle.can_log import CANLogModule
     from modules.web.browser_history import BrowserHistoryModule
 
@@ -94,6 +95,7 @@ def build_default_registry(disabled_modules: set[str] | None = None) -> ModuleRe
         AndroidBackupModule(),
         IOSBackupModule(),
         WhatsAppModule(),
+        WhatsAppMediaModule(),
         DiskImageModule(),
         DVRRecordingsModule(),
         IoTLogModule(),

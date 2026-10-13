@@ -64,6 +64,11 @@ python cli.py image-clusters --case <ID>
 python cli.py graph --case <ID>
 python cli.py timeline --case <ID> --type sms
 python cli.py report --case <ID>
+
+# aquisição ao vivo (aparelho já conectado e autorizado pelo dono)
+python cli.py android-devices
+python cli.py android-backup --output celular.ab
+python cli.py ios-backup --output ./backup_ios --password senha-escolhida-agora
 ```
 
 ### Instalação
