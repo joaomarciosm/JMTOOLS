@@ -19,6 +19,7 @@ from pathlib import Path
 from core.plugin import AnalysisModule
 from core.timeline import Event
 from modules.disk.fat32 import FAT32Volume
+from modules.disk.ntfs import NTFSVolume
 
 SECTOR_SIZE = 512
 RAW_EXTENSIONS = {".img", ".dd", ".raw", ".bin"}
@@ -107,7 +108,42 @@ class DiskImageModule(AnalysisModule):
                     )
                 if fs_guess == "FAT32":
                     events.extend(self._list_fat32(f, p, evidence_item_id))
+                elif fs_guess == "NTFS":
+                    events.extend(self._list_ntfs(f, p, evidence_item_id))
 
+        return events
+
+    def _list_ntfs(self, f, partition: "PartitionInfo", evidence_item_id: str) -> list[Event]:
+        events: list[Event] = []
+        try:
+            volume = NTFSVolume(f, partition.start_offset)
+            for entry in volume.list_files():
+                event_type = "deleted_file_found" if entry["is_deleted"] else "file_found"
+                marker = "[DELETADO] " if entry["is_deleted"] else ""
+                events.append(
+                    self._event(
+                        evidence_item_id,
+                        event_type,
+                        f"{marker}Partição {partition.index}: {entry['path']} ({entry['size']} bytes)",
+                        metadata={
+                            "index": partition.index,
+                            "path": entry["path"],
+                            "size": entry["size"],
+                            "mft_record": entry["mft_record"],
+                            "mtime": entry["mtime"],
+                            "ctime": entry["ctime"],
+                        },
+                        timestamp=entry["mtime"],
+                    )
+                )
+        except (struct.error, ValueError, OSError):
+            events.append(
+                self._event(
+                    evidence_item_id,
+                    "ntfs_parse_error",
+                    f"Partição {partition.index}: falha ao percorrer a $MFT.",
+                )
+            )
         return events
 
     def _list_fat32(self, f, partition: "PartitionInfo", evidence_item_id: str) -> list[Event]:
@@ -211,11 +247,11 @@ class DiskImageModule(AnalysisModule):
 
         return None
 
-    def _event(self, evidence_item_id, event_type, description, metadata=None) -> Event:
+    def _event(self, evidence_item_id, event_type, description, metadata=None, timestamp=None) -> Event:
         from datetime import datetime, timezone
 
         return Event(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=timestamp or datetime.now(timezone.utc).isoformat(),
             source_module=self.name,
             event_type=event_type,
             description=description,

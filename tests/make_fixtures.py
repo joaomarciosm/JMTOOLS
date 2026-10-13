@@ -192,6 +192,170 @@ def make_dvr_folder() -> Path:
     return out_dir
 
 
+def _ntfs_filetime(dt: datetime) -> int:
+    delta = dt - datetime(1601, 1, 1, tzinfo=timezone.utc)
+    return int(delta.total_seconds() * 10_000_000)
+
+
+def _ntfs_resident_attr(attr_type: int, content: bytes, attr_id: int) -> bytes:
+    content_offset = 24
+    unpadded = content_offset + len(content)
+    padded = unpadded + ((-unpadded) % 8)
+    buf = bytearray(padded)
+    struct.pack_into("<I", buf, 0, attr_type)
+    struct.pack_into("<I", buf, 4, padded)
+    buf[8] = 0
+    buf[9] = 0
+    struct.pack_into("<H", buf, 14, attr_id)
+    struct.pack_into("<I", buf, 16, len(content))
+    struct.pack_into("<H", buf, 20, content_offset)
+    buf[content_offset: content_offset + len(content)] = content
+    return bytes(buf)
+
+
+def _ntfs_non_resident_attr(attr_type: int, data_runs: bytes, attr_id: int, size: int, start_vcn: int, end_vcn: int) -> bytes:
+    run_offset = 68
+    unpadded = run_offset + len(data_runs)
+    padded = unpadded + ((-unpadded) % 8)
+    buf = bytearray(padded)
+    struct.pack_into("<I", buf, 0, attr_type)
+    struct.pack_into("<I", buf, 4, padded)
+    buf[8] = 1
+    buf[9] = 0
+    struct.pack_into("<H", buf, 14, attr_id)
+    struct.pack_into("<Q", buf, 16, start_vcn)
+    struct.pack_into("<Q", buf, 24, end_vcn)
+    struct.pack_into("<H", buf, 32, run_offset)
+    struct.pack_into("<Q", buf, 44, size)
+    struct.pack_into("<Q", buf, 52, size)
+    struct.pack_into("<Q", buf, 60, size)
+    buf[run_offset: run_offset + len(data_runs)] = data_runs
+    return bytes(buf)
+
+
+def _ntfs_file_name_attr(parent_record: int, name: str, is_dir: bool, size: int, dt: datetime, attr_id: int) -> bytes:
+    ft = _ntfs_filetime(dt)
+    parent_ref = parent_record | (1 << 48)
+    name_bytes = name.encode("utf-16-le")
+    content = bytearray(66 + len(name_bytes))
+    struct.pack_into("<Q", content, 0, parent_ref)
+    struct.pack_into("<QQQQ", content, 8, ft, ft, ft, ft)
+    struct.pack_into("<Q", content, 40, size)
+    struct.pack_into("<Q", content, 48, size)
+    struct.pack_into("<I", content, 56, 0x10000000 if is_dir else 0x20)
+    content[64] = len(name)
+    content[65] = 1
+    content[66:66 + len(name_bytes)] = name_bytes
+    return _ntfs_resident_attr(ATTR_FILE_NAME, bytes(content), attr_id)
+
+
+ATTR_FILE_NAME = 0x30
+ATTR_DATA = 0x80
+
+
+def _ntfs_build_record(record_size: int, sector_size: int, in_use: bool, is_dir: bool, attrs: list[bytes]) -> bytes:
+    usa_offset = 0x30
+    sectors = record_size // sector_size
+    usa_count = 1 + sectors
+    first_attr_offset = usa_offset + usa_count * 2
+    first_attr_offset += (-first_attr_offset) % 8
+
+    buf = bytearray(record_size)
+    buf[0:4] = b"FILE"
+    struct.pack_into("<H", buf, 4, usa_offset)
+    struct.pack_into("<H", buf, 6, usa_count)
+    struct.pack_into("<H", buf, 16, 1)
+    struct.pack_into("<H", buf, 18, 1)
+    struct.pack_into("<H", buf, 20, first_attr_offset)
+    flags = (0x0001 if in_use else 0) | (0x0002 if is_dir else 0)
+    struct.pack_into("<H", buf, 22, flags)
+
+    pos = first_attr_offset
+    for attr_bytes in attrs:
+        buf[pos: pos + len(attr_bytes)] = attr_bytes
+        pos += len(attr_bytes)
+    struct.pack_into("<I", buf, pos, 0xFFFFFFFF)
+    pos += 4
+    struct.pack_into("<I", buf, 24, pos)
+    struct.pack_into("<I", buf, 28, record_size)
+    struct.pack_into("<H", buf, 40, len(attrs))
+
+    usn = 1
+    struct.pack_into("<H", buf, usa_offset, usn)
+    for i in range(sectors):
+        sector_end = (i + 1) * sector_size - 2
+        replacement = int.from_bytes(bytes(buf[sector_end:sector_end + 2]), "little")
+        struct.pack_into("<H", buf, usa_offset + 2 + i * 2, replacement)
+        struct.pack_into("<H", buf, sector_end, usn)
+
+    return bytes(buf)
+
+
+def make_ntfs_image() -> Path:
+    """Imagem raw com MBR + 1 partição NTFS funcional ($MFT com registros reais)."""
+    FIXTURES_DIR.mkdir(exist_ok=True)
+    out_path = FIXTURES_DIR / "sample_disk_ntfs.img"
+
+    PART_START_LBA = 2048
+    PART_OFFSET = PART_START_LBA * 512
+    SECTOR_SIZE = 512
+    CLUSTER_SIZE = 512
+    RECORD_SIZE = 1024
+    MFT_LCN = 4
+    MFT_CLUSTERS = 32  # 32*512 = 16384 bytes = 16 registros de 1024 bytes
+    NUM_RECORDS = MFT_CLUSTERS * CLUSTER_SIZE // RECORD_SIZE
+
+    total_size = PART_OFFSET + (MFT_LCN + MFT_CLUSTERS + 10) * CLUSTER_SIZE
+    image = bytearray(total_size)
+
+    entry = struct.pack("<BBBBBBBBII", 0x00, 0, 0, 0, 0x07, 0, 0, 0, PART_START_LBA, 20480)
+    image[446:446 + len(entry)] = entry
+    image[510:512] = b"\x55\xaa"
+
+    boot_off = PART_OFFSET
+    image[boot_off + 3: boot_off + 11] = b"NTFS    "
+    struct.pack_into("<H", image, boot_off + 0x0B, SECTOR_SIZE)
+    image[boot_off + 0x0D] = CLUSTER_SIZE // SECTOR_SIZE
+    struct.pack_into("<Q", image, boot_off + 0x30, MFT_LCN)
+    image[boot_off + 0x40] = (256 - 10) if RECORD_SIZE == 1024 else 2  # -10 => 2^10 = 1024
+
+    now = datetime(2026, 4, 1, 15, 30, 0, tzinfo=timezone.utc)
+
+    # Registro 0: $MFT — DATA não residente descrevendo seu próprio extent físico
+    mft_size = MFT_CLUSTERS * CLUSTER_SIZE
+    data_runs = bytes([0x11, MFT_CLUSTERS, MFT_LCN, 0x00])  # 1 byte tamanho, 1 byte delta LCN
+    record0_attrs = [_ntfs_non_resident_attr(ATTR_DATA, data_runs, 0, mft_size, 0, MFT_CLUSTERS - 1)]
+    record0 = _ntfs_build_record(RECORD_SIZE, SECTOR_SIZE, in_use=True, is_dir=False, attrs=record0_attrs)
+
+    # Registro 5: diretório raiz
+    root_fn = _ntfs_file_name_attr(5, ".", True, 0, now, 0)
+    record5 = _ntfs_build_record(RECORD_SIZE, SECTOR_SIZE, in_use=True, is_dir=True, attrs=[root_fn])
+
+    # Registro 6: HELLO.TXT (arquivo normal, DATA residente)
+    hello_content = b"Conteudo do arquivo NTFS de teste.\n"
+    hello_fn = _ntfs_file_name_attr(5, "HELLO.TXT", False, len(hello_content), now, 0)
+    hello_data = _ntfs_resident_attr(ATTR_DATA, hello_content, 1)
+    record6 = _ntfs_build_record(RECORD_SIZE, SECTOR_SIZE, in_use=True, is_dir=False, attrs=[hello_fn, hello_data])
+
+    # Registro 7: SECRET.TXT (deletado — in_use=False, mas ainda presente na $MFT)
+    secret_content = b"Conteudo NTFS deletado mas ainda na MFT.\n"
+    secret_fn = _ntfs_file_name_attr(5, "SECRET.TXT", False, len(secret_content), now, 0)
+    secret_data = _ntfs_resident_attr(ATTR_DATA, secret_content, 1)
+    record7 = _ntfs_build_record(RECORD_SIZE, SECTOR_SIZE, in_use=False, is_dir=False, attrs=[secret_fn, secret_data])
+
+    mft_table = bytearray(NUM_RECORDS * RECORD_SIZE)
+    mft_table[0 * RECORD_SIZE: 1 * RECORD_SIZE] = record0
+    mft_table[5 * RECORD_SIZE: 6 * RECORD_SIZE] = record5
+    mft_table[6 * RECORD_SIZE: 7 * RECORD_SIZE] = record6
+    mft_table[7 * RECORD_SIZE: 8 * RECORD_SIZE] = record7
+
+    mft_offset = PART_OFFSET + MFT_LCN * CLUSTER_SIZE
+    image[mft_offset: mft_offset + len(mft_table)] = mft_table
+
+    out_path.write_bytes(bytes(image))
+    return out_path
+
+
 def make_can_log() -> Path:
     FIXTURES_DIR.mkdir(exist_ok=True)
     out_path = FIXTURES_DIR / "sample_can.log"
@@ -209,11 +373,13 @@ def make_can_log() -> Path:
 if __name__ == "__main__":
     ab = make_android_backup()
     img = make_disk_image()
+    ntfs_img = make_ntfs_image()
     ios_dir = make_ios_backup()
     dvr_dir = make_dvr_folder()
     can_log = make_can_log()
     print(f"Backup Android: {ab}")
-    print(f"Imagem de disco: {img}")
+    print(f"Imagem de disco (FAT32): {img}")
+    print(f"Imagem de disco (NTFS): {ntfs_img}")
     print(f"Backup iOS: {ios_dir}")
     print(f"Pasta DVR: {dvr_dir}")
     print(f"Log CAN: {can_log}")
